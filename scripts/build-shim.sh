@@ -16,6 +16,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
 TREE=""; OUT="$ROOT/out/BootShim.bin"; PSIZE=0; NDK=${ANDROID_NDK_ROOT:-}; KHEADER=1
 FD_BASE=0xB0000000
 FD_SIZE=0x200000
@@ -72,7 +74,7 @@ cp "$SRC" "$OUT"
 
 say "BootShim written to $OUT"
 echo "size:   $(wc -c < "$OUT" | tr -d ' ') bytes"
-echo "sha256: $(shasum -a 256 "$OUT" | cut -d' ' -f1)"
+echo "sha256: $(sha256_file "$OUT")"
 if [ "$KHEADER" = 1 ]; then
   python3 - "$OUT" <<'PY'
 import struct, sys

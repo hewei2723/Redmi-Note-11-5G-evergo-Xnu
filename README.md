@@ -8,6 +8,23 @@ package, the boot shim, the patches applied to upstream EDK2/Mu, and the
 tooling to build, deploy and diagnose the result. Upstream trees are fetched at
 pinned revisions, not vendored.
 
+> ## Verification status
+>
+> Read this before trusting anything else in this file.
+>
+> | Claim | Status |
+> | --- | --- |
+> | The firmware displays the real UniXNU menu on this device | **verified on hardware**, 2026-11-09, by the person who owns the phone |
+> | The tree in this repository rebuilds to that same firmware | **verified**, but only on the machine it was developed on |
+> | The documented workflow works from a clean clone on macOS | **verified** |
+> | The documented workflow works from a clean clone on Linux | **verified on Linux aarch64** (Ubuntu 20.04 container): fetch-deps, build, 2 MiB FD produced. Used distro clang 18 instead of the NDK; see §5. |
+> | **The documented workflow works on a second, independent machine** | **NOT verified.** This is the open question. |
+> | Windows 11 + WSL2 | **not tested at all.** Instructions exist and follow the verified Linux path. |
+> | XNU boots | **no.** See "Not working" below. |
+>
+> No claim here says "reproduced on another machine", because it has not been.
+> If you are the first to try, see §4 for what is and is not expected to work.
+
 ---
 
 ## 1. Project overview
@@ -218,30 +235,49 @@ as whole files for reviewability and overlaid onto the fetched tree by
 
 ## 4. Requirements and dependencies
 
-### Host
+### What has actually been tested
 
-Verified on macOS (Apple silicon and Intel) and expected to work on Linux
-x86_64. Windows is untested.
+This matters more than a support matrix, so it comes first.
 
-| Requirement | Version used |
+| Environment | State |
 | --- | --- |
-| Python | 3.11 or newer |
-| git | 2.30 or newer (submodules, `--filter=blob:none`) |
-| GNU make | any |
-| Android NDK | r30 (`30.0.16248370`) — supplies clang, lld, `llvm-objcopy` |
-| adb | platform-tools, for deployment only |
+| macOS 15 (Apple silicon), full workflow | **verified**: fetch, build, image packaging, baseline comparison |
+| Linux aarch64 (Ubuntu 20.04 container), fetch + build | **verified**: same source, same module inventory |
+| Windows 11 + WSL2 | **not tested.** Instructions below are written from the Linux path, which is the same environment, but nobody has run it yet. |
+| Native Windows (cmd/PowerShell) | **not supported.** The build is a POSIX shell + EDK2 workflow. |
 
-The EDK2 base tools are built from the fetched Mu tree, so no separate EDK2
-installation is needed. `iasl` is only required if you change ACPI tables.
+If you are the first to run this on WSL2 and something fails, that is expected
+and useful: please record which step and what the error was.
+
+### Host requirements
+
+| Requirement | Notes |
+| --- | --- |
+| Python | **3.8 or newer.** 3.8 is the interpreter in stock Ubuntu 20.04 and WSL2 images, and the scripts are written to that floor. |
+| git | 2.25 or newer. `fetch-deps.sh` uses `--filter=blob:none`; older git ignores the flag rather than failing. |
+| GNU make | any |
+| curl or wget | to download the NDK if you do not already have it |
+| C/C++ compiler + libuuid headers | `build-essential uuid-dev` on Debian/Ubuntu. EDK2 builds its own base tools on first use and needs both. `build.sh` checks and names the packages if missing. |
+| **Android NDK r26 or newer** | **required, and not optional.** Supplies `clang`, `lld` and `llvm-objcopy`. A distribution clang will not work: the build targets `aarch64-unknown-windows-msvc` and needs the NDK's linker. Verified with r30 (`30.0.16248370`); r27c also works. |
+| adb + fastboot | only for deployment to the phone |
+| disk | ~2 GB for the fetched tree, ~4 GB with build output |
+
+The EDK2 base tools are built from the fetched Mu tree on first use, so no
+separate EDK2 installation is needed. `iasl` is only required if you change
+ACPI tables.
+
+`build.sh` tells you where to get the NDK if it cannot find one, and accepts
+`--ndk DIR` or `ANDROID_NDK_ROOT`.
 
 ### Upstream components
 
-All pinned in [`deps.lock`](deps.lock), all fetched by `scripts/fetch-deps.sh`:
+All pinned in [`deps.lock`](deps.lock), all fetched by `scripts/fetch-deps.sh`.
+Nothing third-party is vendored in this repository.
 
-| Component | Revision | Why it is needed |
+| Component | Pinned revision | Why it is needed |
 | --- | --- | --- |
-| Project Silicium `Mu-Silicium` | `8221489` | base UEFI tree for MT6833 |
-| Microsoft `mu_basecore` | `3c9c7b2` | EDK2 core; our patch targets this exact commit |
+| `stanveyjiang/uefi-camellia` | `46752be` | the MT6833 UEFI tree this port was built on |
+| Microsoft `mu_basecore` | `3c9c7b2` | EDK2 core; `patches/0001` targets exactly this commit |
 | `mu_plus`, `mu_oem_sample` | `b8d46c7`, `b70b4b7` | DSC include chain |
 | `Device-Binaries` | `a1501e0` | MT6833 prebuilt blobs (DDR, PLL, PMIC) |
 | `Silicium-ACPI` | `1c8bd63` | ACPI table generators |
@@ -249,7 +285,60 @@ All pinned in [`deps.lock`](deps.lock), all fetched by `scripts/fetch-deps.sh`:
 | UniXNU | `d3de950` | `UniXNUPkg`: the boot menu |
 
 `deps.lock` is the single source of truth. If upstream moves, the pinned
-revisions still build.
+revisions still build, and `fetch-deps.sh` fails loudly if a pin cannot be
+obtained rather than building something else.
+
+### Windows: use WSL2
+
+The build needs a POSIX shell, GNU make and EDK2's Python tools. Run it inside
+WSL2, not in PowerShell.
+
+```powershell
+# In an elevated PowerShell, once:
+wsl --install -d Ubuntu-22.04
+```
+
+Then, inside the Ubuntu shell:
+
+```bash
+sudo apt update
+# build-essential and uuid-dev are required by EDK2's C base tools:
+# GenFv includes <uuid/uuid.h>, and VfrCompile needs a C++ compiler.
+sudo apt install -y build-essential uuid-dev git make python3 curl unzip xz-utils
+
+# Keep the checkout and the NDK inside the Linux filesystem.
+# Building under /mnt/c is roughly an order of magnitude slower because every
+# file access crosses the Windows boundary, and EDK2 does a lot of them.
+cd ~
+git clone https://github.com/hewei2723/Redmi-Note-11-5G-evergo-Xnu.git
+cd Redmi-Note-11-5G-evergo-Xnu
+
+# Android NDK, Linux build, inside WSL2:
+curl -LO https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+unzip -q android-ndk-r30-linux.zip
+export ANDROID_NDK_ROOT="$PWD/android-ndk-r30"
+
+scripts/fetch-deps.sh
+scripts/build.sh --tree .work/uefi
+```
+
+Notes specific to WSL2:
+
+* **Keep everything in the Linux filesystem** (`~/...`). A checkout under
+  `/mnt/c/Users/...` works but is very slow, and file-mode changes (the
+  executable bit on `scripts/*.sh`) may be lost.
+* If `scripts/*.sh` lost their executable bit (visible as `Permission denied`),
+  either run `chmod +x scripts/*.sh` or invoke them as `bash scripts/build.sh`.
+* **Deployment from WSL2 to a phone** needs USB passthrough, which WSL2 does not
+  provide by default. Two options:
+  - install Windows `platform-tools` and run `adb`/`fastboot` from PowerShell,
+    passing `--image` to the image built inside WSL2 (paths are visible as
+    `/mnt/c/...` from WSL2 and `C:\\...` from Windows), or
+  - use `usbipd-win` to attach the device to WSL2.
+  Building and verifying the firmware does not need the phone; only deployment
+  does.
+* Native Windows is not supported. Nothing here is written for `cmd.exe` or
+  PowerShell.
 
 ---
 
@@ -314,26 +403,44 @@ To make LK's own header validation happy on your unit, pass
 
 ### Verifying a build
 
-The firmware volume contains 57 FFS modules. To prove your build matches the
-verified baseline, compare executable code, not file hashes:
+A successful build produces `out/SILICIUM_UEFI.fd`, exactly 2097152 bytes. That
+size check is the first thing to confirm; a different size means the hot-jump
+`-D` flags were lost.
+
+To compare against the verified baseline:
 
 ```bash
-scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd
+scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd --baseline baseline-FVMAIN.Fv
 ```
 
-Two builds of identical sources are byte-identical **only when the checkout
-path has the same length**, because the compiler embeds each module's PDB path
-(and the strings that reference it) into `.rdata`, which shifts the layout of
-the module that follows. Measured on this project:
+**What a comparison can and cannot tell you depends on your compiler**, and this
+was measured, not assumed:
 
-| Build location | Modules with identical `.text` |
+| Build | Result vs. the macOS/clang-18 baseline |
 | --- | --- |
-| path length equal to the original | **57 / 57** |
-| different path length | 46 / 57, the rest differing only in ADRP/add offsets into shifted `.rdata` |
+| same machine, same toolchain, same path length | 57/57 modules byte-identical |
+| same machine, same toolchain, different path length | 46 identical, 11 layout-only, 0 code |
+| **Linux aarch64, distro clang 18.1.8** | 6 identical, **51 code-different** |
 
-So a path-length difference is expected noise, and a difference in the
-instruction bytes themselves is not. `compare-baseline.py` reports which one
-you have.
+The third row is not a regression. A different clang version emits different
+instructions for the same source, so cross-toolchain comparison cannot prove
+equivalence either way. Treat "code differs" as **not comparable** unless both
+builds used the same compiler.
+
+Two further effects, both measured:
+
+* **Build path length.** The compiler embeds each module's PDB path in
+  `.rdata`; a different path length shifts that string and the ADRP/ADD
+  immediates addressing it. Same-length path gives byte-identical output.
+* **Toolchain version.** Anything from clang 18 upwards compiles this tree.
+  clang 11 fails in `ArmMmuLib`'s assembly (`symbol ... can not be undefined in
+  a subtraction expression`) and clang 10 additionally fails the `-Wformat`
+  checks in `MdePkg`'s `UefiLib`. That is why the NDK is a hard requirement
+  rather than a convenience.
+
+So: use the size check and a successful build as your correctness signal on a
+new machine. Use `compare-baseline.py` for same-toolchain regression checks
+after you change something.
 
 ---
 

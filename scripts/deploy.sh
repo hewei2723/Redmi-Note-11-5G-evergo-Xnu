@@ -24,6 +24,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
 IMAGE=""; SERIAL=${ANDROID_SERIAL:-}; CONFIRM=0; FLASH=0; DRY=0; READBACK=0
 BEACON_PA=0x4811fc00
 TRC_PA=0x4811f800
@@ -83,7 +85,7 @@ fi
 # ---------------------------------------------------------------------------
 say "pushing image"
 "$ADB" -s "$SERIAL" push "$IMAGE" /data/local/tmp/evergo-boot.img >/dev/null
-HOST_SHA=$(shasum -a 256 "$IMAGE" | cut -d' ' -f1)
+HOST_SHA=$(sha256_file "$IMAGE")
 DEV_SHA=$("$ADB" -s "$SERIAL" shell "sha256sum /data/local/tmp/evergo-boot.img" 2>/dev/null | tr -d '\r' | cut -d' ' -f1)
 [ "$HOST_SHA" = "$DEV_SHA" ] || die "push corrupted (host $HOST_SHA, device $DEV_SHA)"
 echo "  sha256 $HOST_SHA"

@@ -17,6 +17,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
 TREE=""
 OUT="$ROOT/out/SILICIUM_UEFI.fd"
 NDK=${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}
@@ -56,7 +58,31 @@ if [ -z "$NDK" ]; then
     [ -d "$candidate/toolchains/llvm/prebuilt" ] && NDK=$candidate
   done
 fi
-[ -n "$NDK" ] && [ -d "$NDK" ] || die "Android NDK not found; pass --ndk or set ANDROID_NDK_ROOT"
+if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+  cat >&2 <<'MSG'
+build: Android NDK not found.
+
+The EDK2 CLANGPDB toolchain needs clang, lld and llvm-objcopy from the Android
+NDK (r26 or newer; this project was verified with r30). A distribution clang
+will not do: the build passes -target aarch64-unknown-windows-msvc, which needs
+the NDK's lld.
+
+Install it and point this script at it:
+
+  macOS    brew install --cask android-ndk
+           scripts/build.sh --tree .work/uefi --ndk "$HOME/Library/Android/sdk/ndk/30.0.16248370"
+
+  Linux    wget https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+           unzip android-ndk-r30-linux.zip
+           scripts/build.sh --tree .work/uefi --ndk "$PWD/android-ndk-r30"
+
+  WSL2     same as Linux; keep the NDK inside the Linux filesystem
+           (e.g. ~/android-ndk-r30), not under /mnt/c, or the build is very slow.
+
+Or set ANDROID_NDK_ROOT once and omit --ndk.
+MSG
+  exit 1
+fi
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)   HOST=darwin-x86_64 ;;   # NDK ships an x86_64 host toolchain
@@ -90,13 +116,37 @@ mkdir -p "$TREE/.bin" "$TREE/Conf"
 if [ ! -x "$TREE/Mu_Basecore/BaseTools/BinWrappers/PosixLike/build" ]; then
   die "$TREE/Mu_Basecore/BaseTools is incomplete; re-run scripts/fetch-deps.sh"
 fi
+# EDK2's C base tools need libuuid headers (uuid/uuid.h) and, on some
+# distributions, a C++ compiler for VfrCompile. Check before invoking make so
+# the failure names the missing package instead of a wall of compiler output.
+missing=""
+if [ ! -f /usr/include/uuid/uuid.h ] && ! echo '#include <uuid/uuid.h>' | \
+     ${CC:-cc} -E - >/dev/null 2>&1; then
+  missing="libuuid development headers"
+fi
+if ! command -v g++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1; then
+  missing="$missing${missing:+, }a C++ compiler"
+fi
+if [ -n "$missing" ] && [ ! -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/GenFw" ]; then
+  cat >&2 <<MSG
+build: missing host packages needed to build the EDK2 base tools: $missing
+
+  Debian/Ubuntu/WSL2:  sudo apt install -y build-essential uuid-dev
+  Fedora:              sudo dnf install -y gcc gcc-c++ libuuid-devel
+  Arch:                sudo pacman -S --needed base-devel util-linux
+  macOS:               xcode-select --install   (libuuid is part of the SDK)
+
+MSG
+  exit 1
+fi
+
 if [ ! -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/GenFw" ]; then
   say "building EDK2 base tools (first run only)"
   # BaseTools builds a handful of optional helpers (BrotliCompress, VfrCompile,
   # ...). A failure in one of those is not fatal for this platform, which needs
   # GenFw/GenFfs/GenFv/GenSec and the Python drivers. Judge by the tools the
   # build actually uses rather than by make's exit status.
-  ( cd "$TREE/Mu_Basecore" && make -C BaseTools -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" ) \
+  ( cd "$TREE/Mu_Basecore" && make -C BaseTools -j"$(nproc_safe)" ) \
     || echo "  note: BaseTools reported errors; checking the required tools"
   for tool in GenFw GenFfs GenFv GenSec; do
     [ -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/$tool" ] \
@@ -139,7 +189,7 @@ SIZE=$(wc -c < "$BUILT" | tr -d ' ')
 mkdir -p "$(dirname "$OUT")"
 cp "$BUILT" "$OUT"
 say "FD written to $OUT"
-echo "sha256: $(shasum -a 256 "$OUT" | cut -d' ' -f1)"
+echo "sha256: $(sha256_file "$OUT")"
 echo
 echo "The FD is not yet a boot image. Package it with scripts/make-boot-image.sh"
 echo "and verify it on hardware as described in README.md."

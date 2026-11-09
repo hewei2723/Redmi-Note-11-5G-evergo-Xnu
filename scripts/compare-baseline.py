@@ -13,7 +13,13 @@ address them, even though the code is identical. The report distinguishes:
   identical   .text matches the baseline exactly
   layout      .text differs only in ADRP/ADD immediates - same code, the
               build path has a different length
-  code        .text differs in ways that are not address fixups - investigate
+  code        .text differs in ways that are not address fixups
+
+IMPORTANT: "code" differences are only meaningful when the two builds used the
+same compiler. A different clang version legitimately produces different
+instructions for the same source. Compare against a baseline built with the
+toolchain you are using, or treat a cross-toolchain result as "not comparable"
+rather than as a regression.
 
 Usage:
     scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd
@@ -23,6 +29,10 @@ Usage:
 --fv  an already-decompressed FVMAIN.Fv
 """
 from __future__ import annotations
+
+# Requires Python 3.8+. The `from __future__` import above keeps the
+# builtin-generic annotations below from being evaluated at runtime, so this
+# runs on the 3.8 interpreter that ships with Ubuntu 20.04 and WSL2 images.
 
 import argparse
 import json
@@ -42,7 +52,7 @@ BASELINE_MODULES = {
 PATH_SENSITIVE_HINT = "compiler embeds the module PDB path into .rdata"
 
 
-def fv_files(data: bytes) -> dict[str, bytes]:
+def fv_files(data: bytes) -> "dict[str, bytes]":
     """Return {module GUID: FFS file bytes} for an uncompressed FVMAIN."""
     base = data.find(b"_FVH") - 40
     if base < 0:
@@ -52,7 +62,7 @@ def fv_files(data: bytes) -> dict[str, bytes]:
     off = base + max(hdr, ext + 0x14)
     while data[off:off + 4] == b"\xff" * 4:
         off += 4
-    out: dict[str, bytes] = {}
+    out: "dict[str, bytes]" = {}
     while off + 24 <= len(data):
         name = data[off:off + 16]
         if name == b"\xff" * 16:
@@ -107,7 +117,7 @@ def _adrp_imm(word: int) -> int:
     return imm
 
 
-def _add_imm12(word: int) -> int | None:
+def _add_imm12(word: int) -> "int | None":
     """Decode the immediate of ADD (immediate), 64-bit, if this is one."""
     # sf=1 op=0 S=0 -> 1x010001 sh imm12 Rn Rd
     if (word & 0x7F000000) != 0x11000000:
@@ -224,6 +234,8 @@ def main() -> int:
             print(f"  + {g}")
     if code:
         print("\nModules whose instructions differ beyond address fixups:")
+        print("NOTE: this is expected if the baseline was built with a different")
+        print("clang version. Only a same-toolchain comparison proves a change.")
         for g in code:
             print(f"  ! {g}")
         print("\nThis is a real behavioural difference. Compare the sources of these")

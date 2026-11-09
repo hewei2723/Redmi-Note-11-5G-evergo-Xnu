@@ -147,10 +147,21 @@ scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd --baseline baseline-FVMAIN
 
 Measured on this project:
 
-| Build location | Result |
+| Build | Result |
 | --- | --- |
-| path length equal to the original | 57 identical, 0 layout-only, 0 code |
-| path length different | 46 identical, 11 layout-only, 0 code |
+| macOS, same path length, same clang | 57 identical, 0 layout-only, 0 code |
+| macOS, different path length, same clang | 46 identical, 11 layout-only, 0 code |
+| Linux aarch64, distro clang 18.1.8 | 6 identical, 0 layout-only, 51 code |
+
+**The third row is not a regression.** A different clang version emits
+different instructions for identical source. Cross-toolchain comparison cannot
+prove equivalence in either direction, so the tool reports it as "code differs"
+with an explicit warning rather than pretending it is a fault.
+
+What the tool is genuinely good for: after you change a source file, compare
+your new build against a build of the same tree on the same machine with the
+same toolchain. Then a "code" finding means you changed behaviour, and a
+"layout-only" finding means you only changed where a string landed.
 
 The mechanism: the compiler embeds each module's PDB path in `.rdata`, so a
 different path length resizes that string and shifts everything after it,
