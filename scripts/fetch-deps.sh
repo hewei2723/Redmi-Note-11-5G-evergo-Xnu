@@ -55,9 +55,10 @@ git -C "$BASE" fetch --quiet origin "$BASE_REV" || die "cannot fetch $BASE_REV"
 git -C "$BASE" checkout --quiet "$BASE_REV"
 
 # The base tree carries submodules (Mu core, MediaTek blobs, ACPI, OpenSSL).
-# Shallow-init them here; the exact revisions are re-pinned in step 2.
-git -C "$BASE" submodule update --init --recursive --depth 1 --jobs "$JOBS" \
-  || say "some submodules could not be fetched shallowly; they are re-pinned in step 2"
+# Only the first level matters for the build; the exact revisions are pinned
+# in step 2, so a failure here is recoverable and not fatal.
+git -C "$BASE" submodule update --init --depth 1 --jobs "$JOBS" \
+  || say "note: first-level submodules could not all be fetched now; step 2 pins them"
 say "UEFI base at $(git -C "$BASE" rev-parse --short HEAD)"
 
 # ---------------------------------------------------------------------------
@@ -65,32 +66,28 @@ say "UEFI base at $(git -C "$BASE" rev-parse --short HEAD)"
 # ---------------------------------------------------------------------------
 pin_submodule() {  # pin_submodule <path> <revision> <url>
   local path=$1 rev=$2 url=$3
-  local abs="$BASE/$path"
-  if [ ! -d "$abs/.git" ] && [ ! -e "$abs/.git" ]; then
-    say "fetching $path"
-    git -C "$BASE" clone --quiet --filter=blob:none "$url" "$path" 2>/dev/null || true
-  fi
-  if [ -d "$abs/.git" ] || [ -f "$abs/.git" ]; then
-    git -C "$abs" fetch --quiet origin "$rev" 2>/dev/null || true
-    git -C "$abs" checkout --quiet "$rev" 2>/dev/null \
-      || echo "  note: $path already at a compatible revision"
-  else
-    echo "  note: $path not a git checkout, skipping pin"
-  fi
-}
+  local abs="$BASE/$path" head
 
-for key in mu_basecore mu_plus mu_oem_sample device-binaries silicium-acpi openssl; do
-  rev=$(lock_value "$key" 3); url=$(lock_value "$key" 2)
-  case "$key" in
-    mu_basecore)     path=Mu_Basecore ;;
-    mu_plus)         path=Common/Mu ;;
-    mu_oem_sample)   path=Common/Mu_OEM_Sample ;;
-    device-binaries) path=Binaries ;;
-    silicium-acpi)   path=Silicium-ACPI ;;
-    openssl)         path=Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl ;;
-  esac
-  pin_submodule "$path" "$rev" "$url"
-done
+  if [ ! -e "$abs/.git" ]; then
+    say "fetching $path"
+    git -C "$BASE" clone --quiet --filter=blob:none "$url" "$path" \
+      || die "cannot clone $path from $url (network problem?)"
+  fi
+
+  if ! git -C "$abs" cat-file -e "$rev^{commit}" 2>/dev/null; then
+    git -C "$abs" fetch --quiet origin "$rev" \
+      || die "cannot fetch $rev for $path (network problem?)"
+  fi
+
+  git -C "$abs" checkout --quiet "$rev" \
+    || die "cannot check out $rev in $path"
+
+  head=$(git -C "$abs" rev-parse HEAD)
+  if [ "$head" != "$rev" ]; then
+    die "$path is at $head, expected $rev"
+  fi
+  echo "  $path @ $(git -C "$abs" rev-parse --short HEAD)"
+}
 
 # ---------------------------------------------------------------------------
 # 3. Apply the evergo patches to the upstream tree
