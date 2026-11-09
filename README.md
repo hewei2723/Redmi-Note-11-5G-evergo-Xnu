@@ -17,9 +17,10 @@ pinned revisions, not vendored.
 > | The firmware displays the real UniXNU menu on this device | **verified on hardware**, 2026-11-09, by the person who owns the phone |
 > | The tree in this repository rebuilds to that same firmware | **verified**, but only on the machine it was developed on |
 > | The documented workflow works from a clean clone on macOS | **verified** |
-> | The documented workflow works from a clean clone on Linux | **verified on Linux aarch64** (Ubuntu 20.04 container): fetch-deps, build, 2 MiB FD produced. Used distro clang 18 instead of the NDK; see §5. |
-> | **The documented workflow works on a second, independent machine** | **NOT verified.** This is the open question. |
-> | Windows 11 + WSL2 | **not tested at all.** Instructions exist and follow the verified Linux path. |
+> | The documented workflow works from a clean clone on Linux | **verified**, twice, in a clean Ubuntu 20.04 container: all four documented commands, no arguments beyond those shown. |
+> | BootShim.bin is identical across platforms | **verified**: sha256 `26c74d4e...` on both macOS and Linux |
+> | **The documented workflow works on a second, independent machine** | **NOT verified.** Everything so far ran on one machine, in containers on it. |
+> | Windows 11 + WSL2 | **not tested at all.** Instructions follow the verified Linux path, but nobody has run them on Windows. |
 > | XNU boots | **no.** See "Not working" below. |
 >
 > No claim here says "reproduced on another machine", because it has not been.
@@ -287,6 +288,31 @@ Nothing third-party is vendored in this repository.
 `deps.lock` is the single source of truth. If upstream moves, the pinned
 revisions still build, and `fetch-deps.sh` fails loudly if a pin cannot be
 obtained rather than building something else.
+
+### First run on a new machine: what to expect
+
+Everything below was learned by doing it, and each item was a real failure at
+some point.
+
+| Step | Typical first-run cost | What can go wrong |
+| --- | --- | --- |
+| `fetch-deps.sh` | 5-20 min, ~1.5 GB on disk | Network. It clones the base tree, 6 first-level submodules and 9 more inside `Mu_Basecore`. It resumes from whatever is already on disk, so re-running is the fix for a dropped connection. |
+| EDK2 base tools build | 1-2 min, once | Missing `build-essential` or `uuid-dev`. `build.sh` names them. |
+| `build.sh` | ~30 s after the first run | The FD must come out exactly 2097152 bytes; anything else means the hot-jump `-D` flags were lost. |
+| `build-shim.sh` | instant | Needs the NDK. Its output should be 304 bytes with sha256 `26c74d4e...` regardless of platform. |
+| `make-boot-image.sh` | instant | Needs the DTB from the fetched tree, not from this repo alone. |
+
+Two things that are **not** required and will not help:
+
+* a system-wide EDK2 install — the tree builds its own tools;
+* running `build` by hand — `build.sh` exists because the raw command silently
+  links for the wrong address.
+
+Two things you **must** supply yourself:
+
+* the Android NDK (see below), and
+* for deployment only: `adb`, an unlocked bootloader, and the device-side
+  `evergo_stage1.ko` module described in `docs/RUNBOOK.md` §1.
 
 ### Windows: use WSL2
 
