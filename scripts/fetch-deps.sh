@@ -89,6 +89,16 @@ pin_submodule() {  # pin_submodule <path> <revision> <url>
   echo "  $path @ $(git -C "$abs" rev-parse --short HEAD)"
 }
 
+# Mu_Basecore has nested submodules of its own (e.g. MdePkg's mipisyst) that
+# its .dec files reference. Without them build.py stops with "is not found in
+# packages path". These are not version-critical: initialise whatever the
+# pinned commit records.
+if [ -f "$BASE/Mu_Basecore/.gitmodules" ]; then
+  say "initialising nested submodules of Mu_Basecore"
+  git -C "$BASE/Mu_Basecore" submodule update --init --recursive --depth 1 --jobs "$JOBS" \
+    || say "note: some nested submodules could not be fetched"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Apply the evergo patches to the upstream tree
 # ---------------------------------------------------------------------------

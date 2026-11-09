@@ -92,8 +92,17 @@ if [ ! -x "$TREE/Mu_Basecore/BaseTools/BinWrappers/PosixLike/build" ]; then
 fi
 if [ ! -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/GenFw" ]; then
   say "building EDK2 base tools (first run only)"
+  # BaseTools builds a handful of optional helpers (BrotliCompress, VfrCompile,
+  # ...). A failure in one of those is not fatal for this platform, which needs
+  # GenFw/GenFfs/GenFv/GenSec and the Python drivers. Judge by the tools the
+  # build actually uses rather than by make's exit status.
   ( cd "$TREE/Mu_Basecore" && make -C BaseTools -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" ) \
-    || die "EDK2 base tools failed to build"
+    || echo "  note: BaseTools reported errors; checking the required tools"
+  for tool in GenFw GenFfs GenFv GenSec; do
+    [ -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/$tool" ] \
+      || die "required EDK2 tool $tool was not built"
+  done
+  say "EDK2 base tools ready"
 fi
 
 # ---------------------------------------------------------------------------
