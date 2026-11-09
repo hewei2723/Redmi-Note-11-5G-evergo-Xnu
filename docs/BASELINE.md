@@ -129,6 +129,36 @@ believing they were part of the working version.
 | SoC keypad register rewrite in `KeypadDeviceLib.c` | never produced a key event |
 | `Keypad` region added to `MemoryMapLib` | changed `.rdata` layout of every module linking that library |
 
+## Reproducing the comparison
+
+`scripts/compare-baseline.py` compares a build against a baseline FVMAIN and
+classifies each module:
+
+```bash
+# decompresses the FD for you
+scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd --baseline baseline-FVMAIN.Fv
+```
+
+| Class | Meaning |
+| --- | --- |
+| identical | `.text` matches byte for byte |
+| layout-only | differences are confined to ADRP/ADD/MOV immediates that address relocated data |
+| code | instruction fields differ beyond address fixups — a real behavioural change |
+
+Measured on this project:
+
+| Build location | Result |
+| --- | --- |
+| path length equal to the original | 57 identical, 0 layout-only, 0 code |
+| path length different | 46 identical, 11 layout-only, 0 code |
+
+The mechanism: the compiler embeds each module's PDB path in `.rdata`, so a
+different path length resizes that string and shifts everything after it,
+which changes the immediates that address it. The code is the same; only the
+addresses of the embedded strings move. That is why the same-length build is
+byte-identical and the different-length build is not — and why a *code* class
+finding is the one that matters.
+
 ## Keeping the baseline reachable
 
 The reconstruction is preserved as a tagged branch in the development checkout,

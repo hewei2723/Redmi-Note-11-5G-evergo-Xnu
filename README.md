@@ -314,12 +314,26 @@ To make LK's own header validation happy on your unit, pass
 
 ### Verifying a build
 
-There is no byte-reproducible hash across machines: the compiler stamps build
-paths and PDB signatures into every module, so two builds of identical sources
-differ in a handful of bytes. What *is* stable is the module inventory. The
-baseline build had 57 FFS modules; compare yours against
-[`docs/BASELINE.md`](docs/BASELINE.md) if you need to prove you built the same
-thing.
+The firmware volume contains 57 FFS modules. To prove your build matches the
+verified baseline, compare executable code, not file hashes:
+
+```bash
+scripts/compare-baseline.py --fd out/SILICIUM_UEFI.fd
+```
+
+Two builds of identical sources are byte-identical **only when the checkout
+path has the same length**, because the compiler embeds each module's PDB path
+(and the strings that reference it) into `.rdata`, which shifts the layout of
+the module that follows. Measured on this project:
+
+| Build location | Modules with identical `.text` |
+| --- | --- |
+| path length equal to the original | **57 / 57** |
+| different path length | 46 / 57, the rest differing only in ADRP/add offsets into shifted `.rdata` |
+
+So a path-length difference is expected noise, and a difference in the
+instruction bytes themselves is not. `compare-baseline.py` reports which one
+you have.
 
 ---
 
