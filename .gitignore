@@ -1,0 +1,55 @@
+# Build outputs
+out/
+.work/
+Build/
+*.fd
+*.img
+*.bin
+!BootShim/BootShim.S
+!patches/*.patch
+
+# EDK2 build products
+*.efi
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.map
+*.pdb
+*.depex
+*.Fv
+*.fv
+*.inf.out
+AutoGen.*
+*.dsc.inc.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.python-version
+.venv/
+venv/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs and diagnostic captures
+*.log
+logs/
+beacon.bin
+trace.bin
+captures/
+crash-*.txt
+
+# Local configuration
+.env
+*.local
+Conf/target.txt
+Conf/build_rule.txt
+Conf/tools_def.txt

@@ -1,0 +1,58 @@
+# Pinned upstream revisions
+#
+# Every component this project depends on, at the exact revision the verified
+# build was produced from. `scripts/fetch-deps.sh` reads this file; nothing in
+# this repository vendors a third-party tree.
+#
+# Format: <key> <url> <revision>
+#   key       directory name used by scripts/fetch-deps.sh under .deps/ or the
+#             submodule path inside the UEFI tree
+#   url       clone URL
+#   revision  commit, tag or branch that was actually built and tested
+
+# ---------------------------------------------------------------------------
+# UEFI framework
+# ---------------------------------------------------------------------------
+
+# Project Silicium: the MT6833 UEFI firmware this port is derived from.
+# Provides Silicon/Silicium/SiliciumPkg (SEC, BDS glue, SimpleFbDxe,
+# KeypadDxe, BootManagerLib) and the evergoPkg parent layout.
+uefi-base        https://github.com/Project-Silicium/Mu-Silicium.git          8221489a628aa47daa0776322ee17ce8dc7a9981
+
+# Microsoft Mu (mu_basecore): the EDK2 fork the UEFI core is built from.
+# Pinned because patches/0001-evergo-mu_basecore.patch is written against it.
+mu_basecore      https://github.com/microsoft/mu_basecore.git                 3c9c7b2e211e62d2a954ad760a36fe05adc43aa3
+
+# mu_plus / mu_oem_sample: additional Mu packages referenced by the DSC include
+# chain. Same release branch as mu_basecore.
+mu_plus          https://github.com/microsoft/mu_plus.git                     b8d46c71610318e36a661819e1e3c0b8bdda413a
+mu_oem_sample    https://github.com/microsoft/mu_oem_sample.git               b70b4b7bb02c43bf9db2172dfb3ed0457e2361d6
+
+# Device-Binaries: prebuilt MT6833 blobs (DDR training, PLL, PMIC sequences)
+# loaded by the firmware. Kept as a pinned external dependency rather than a
+# committed binary dump.
+device-binaries  https://github.com/Project-Silicium/Device-Binaries.git      a1501e0c2e642d6ac0d8f52c85af2a67b75a7799
+
+# Silicium-ACPI: ACPI table generators used by the DSC include chain.
+silicium-acpi    https://github.com/Project-Silicium/Silicium-ACPI.git        1c8bd63a7ffcaecf3c8764a6b01a11e053457543
+
+# OpenSSL: linked by OpensslPkg (used by the UEFI authenticated-variable path).
+openssl          https://github.com/openssl/openssl.git                       67b5686b4419b4cb8caa502711c41815f5279751
+
+# ---------------------------------------------------------------------------
+# XNU boot manager
+# ---------------------------------------------------------------------------
+
+# UniXNU: provides UniXNUPkg (menu UI, boot-entry model, DarwinBoot handoff).
+# The verified build ran the built-in configuration menu; UniXNUPkg in this
+# repository is byte-identical to package/UniXNUPkg at this revision.
+unixnu           https://github.com/UniXNU/UniXNU.git                         d3de950a23a54d454d6ac21d8deceaa3f4ad0e73
+
+# ---------------------------------------------------------------------------
+# Toolchain
+# ---------------------------------------------------------------------------
+
+# Android NDK r30 supplies clang/lld/llvm-* for the AARCH64 EDK2 build
+# (CLANGPDB toolchain). Any recent NDK with clang >= 18 works, but the verified
+# build used this exact release.
+android-ndk      https://developer.android.com/ndk/downloads                 30.0.16248370

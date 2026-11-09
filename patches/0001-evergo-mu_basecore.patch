@@ -1,0 +1,1107 @@
+diff --git a/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c b/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c
+index 5fd28e3..2e788d4 100644
+--- a/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c
++++ b/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c
+@@ -505,6 +505,7 @@ GicV3IrqInterruptHandler (
+     (*InterruptHandlerPtr)(GicInterrupt, SystemContext);
+   } else {
+     DEBUG ((DEBUG_ERROR, "Spurious GIC interrupt: 0x%x\n", (UINT32)GicInterrupt));
++    GicV3DisableInterruptSource (&gHardwareInterruptV3Protocol, GicInterrupt);
+     GicV3EndOfInterrupt (&gHardwareInterruptV3Protocol, GicInterrupt);
+   }
+ }
+@@ -786,6 +787,28 @@ GicV3DxeInitialize (
+ 
+   mGicRedistributorBase = GicGetCpuRedistributorBase (PcdGet64 (PcdGicRedistributorsBase));
+ 
++  /*
++   * Camellia: Linux may leave this CPU's redistributor asleep and with the
++   * SGI/PPI frame configured; accesses to GICR_ISENABLER0 then never
++   * complete. Wake it and reset the private interrupt frame.
++   */
++  RegValue = MmioRead32 (mGicRedistributorBase + 0x0014); /* GICR_WAKER */
++  MmioWrite32 (mGicRedistributorBase + 0x0014, RegValue & ~(UINT32)(1 << 1));
++  while ((MmioRead32 (mGicRedistributorBase + 0x0014) & (1 << 2)) != 0) {
++    /* wait for ChildrenAsleep to clear */
++  }
++
++  /* Disable all SGIs/PPIs and give them the default priority. */
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICENABLER, 0xffffffff);
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICENABLER + 4, 0xffffffff);
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICPENDR, 0xffffffff);
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICPENDR + 4, 0xffffffff);
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICACTIVER, 0xffffffff);
++  MmioWrite32 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GICR_ICACTIVER + 4, 0xffffffff);
++  for (Index = 0; Index < 32; Index++) {
++    MmioWrite8 (mGicRedistributorBase + ARM_GICR_CTLR_FRAME_SIZE + ARM_GIC_ICDIPR + Index, ARM_GIC_DEFAULT_PRIORITY);
++  }
++
+   RegValue = ArmGicV3GetControlSystemRegisterEnable ();
+   if ((RegValue & ICC_SRE_EL2_SRE) == 0) {
+     ArmGicV3SetControlSystemRegisterEnable (RegValue | ICC_SRE_EL2_SRE);
+diff --git a/ArmPkg/Drivers/TimerDxe/TimerDxe.c b/ArmPkg/Drivers/TimerDxe/TimerDxe.c
+index b7f5ecc..e6b71fd 100644
+--- a/ArmPkg/Drivers/TimerDxe/TimerDxe.c
++++ b/ArmPkg/Drivers/TimerDxe/TimerDxe.c
+@@ -393,18 +393,26 @@ TimerInitialize (
+     TimerSecIntrNum  = PcdGet32 (PcdArmArchTimerSecIntrNum);
+     TimerIntrNum     = PcdGet32 (PcdArmArchTimerIntrNum);
+   }
++  (VOID)TimerVirtIntrNum;
++  (VOID)TimerHypIntrNum;
++  (VOID)TimerSecIntrNum;
+ 
+-  // Install secure and Non-secure interrupt handlers
+-  // Note: Because it is not possible to determine the security state of the
+-  // CPU dynamically, we just install interrupt handler for both sec and non-sec
+-  // timer PPI
+-  Status = gInterrupt->RegisterInterruptSource (gInterrupt, TimerVirtIntrNum, TimerInterruptHandler);
+-  ASSERT_EFI_ERROR (Status);
++  /*
++   * Camellia starts from Linux in the non-secure world. The virtual timer and
++   * its PPI belong to the interrupted Linux state; this driver uses the
++   * physical counter and must not claim the virtual source.
++   */
+ 
+   //
+   // The hypervisor timer interrupt may be omitted by implementations that
+   // execute under virtualization.
+   //
++  /*
++   * Camellia: started from the non-secure Linux world, the hypervisor and
++   * secure timer PPIs cannot be configured here, and the virtual timer belongs
++   * to the interrupted Linux state. Only the physical PPI is registered.
++   */
++  #if 0
+   if (TimerHypIntrNum != 0) {
+     Status = gInterrupt->RegisterInterruptSource (gInterrupt, TimerHypIntrNum, TimerInterruptHandler);
+     ASSERT_EFI_ERROR (Status);
+@@ -412,6 +420,7 @@ TimerInitialize (
+ 
+   Status = gInterrupt->RegisterInterruptSource (gInterrupt, TimerSecIntrNum, TimerInterruptHandler);
+   ASSERT_EFI_ERROR (Status);
++  #endif
+ 
+   Status = gInterrupt->RegisterInterruptSource (gInterrupt, TimerIntrNum, TimerInterruptHandler);
+   ASSERT_EFI_ERROR (Status);
+diff --git a/ArmPkg/Include/Library/ArmGicLib.h b/ArmPkg/Include/Library/ArmGicLib.h
+index f50128e..4da3554 100644
+--- a/ArmPkg/Include/Library/ArmGicLib.h
++++ b/ArmPkg/Include/Library/ArmGicLib.h
+@@ -133,6 +133,8 @@
+ // GIC SGI & PPI Redistributor frame
+ #define ARM_GICR_ISENABLER  0x0100      // Interrupt Set-Enable Registers
+ #define ARM_GICR_ICENABLER  0x0180      // Interrupt Clear-Enable Registers
++#define ARM_GICR_ICPENDR    0x0280      // Interrupt Clear-Pending Registers
++#define ARM_GICR_ICACTIVER  0x0380      // Interrupt Clear-Active Registers
+ 
+ // GIC Cpu interface
+ #define ARM_GIC_ICCICR   0x00         // CPU Interface Control Register
+diff --git a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
+index fbbecdc..9378c27 100644
+--- a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
++++ b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
+@@ -59,7 +59,14 @@ ArmGenericTimerGetTimerFreq (
+   VOID
+   )
+ {
+-  return ArmReadCntFrq ();
++  UINTN Freq;
++
++  Freq = ArmReadCntFrq ();
++  if (!Freq) {
++    Freq = FixedPcdGet64 (PcdTimerFreqOverwrite);
++  }
++
++  return Freq;
+ }
+ 
+ UINTN
+diff --git a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
+index c37f272..0462650 100644
+--- a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
++++ b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
+@@ -22,7 +22,12 @@
+ [Packages]
+   MdePkg/MdePkg.dec
+   ArmPkg/ArmPkg.dec
++  SiliciumPkg/SiliciumPkg.dec
+ 
+ [LibraryClasses]
+   ArmLib
+   BaseLib
++  PcdLib
++
++[FixedPcd]
++  gSiliciumPkgTokenSpaceGuid.PcdTimerFreqOverwrite
+diff --git a/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.c b/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.c
+index 893125a..4b1018b 100644
+--- a/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.c
++++ b/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.c
+@@ -59,7 +59,14 @@ ArmGenericTimerGetTimerFreq (
+   VOID
+   )
+ {
+-  return ArmReadCntFrq ();
++  UINTN Freq;
++
++  Freq = ArmReadCntFrq ();
++  if (!Freq) {
++    Freq = FixedPcdGet64 (PcdTimerFreqOverwrite);
++  }
++
++  return Freq;
+ }
+ 
+ UINTN
+diff --git a/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.inf b/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.inf
+index 89fcb71..5c29ece 100644
+--- a/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.inf
++++ b/ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.inf
+@@ -22,7 +22,12 @@
+ [Packages]
+   MdePkg/MdePkg.dec
+   ArmPkg/ArmPkg.dec
++  SiliciumPkg/SiliciumPkg.dec
+ 
+ [LibraryClasses]
+   ArmLib
+   BaseLib
++  PcdLib
++
++[FixedPcd]
++  gSiliciumPkgTokenSpaceGuid.PcdTimerFreqOverwrite
+diff --git a/EmbeddedPkg/Library/PrePiHobLib/Hob.c b/EmbeddedPkg/Library/PrePiHobLib/Hob.c
+index a25ea74..d5a6b97 100644
+--- a/EmbeddedPkg/Library/PrePiHobLib/Hob.c
++++ b/EmbeddedPkg/Library/PrePiHobLib/Hob.c
+@@ -12,6 +12,9 @@
+ #include <Library/BaseLib.h>
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
++
++// evergo Test-D: bisect BuildMemoryTypeInformationHob on real hardware.
++VOID SecBeaconHook (IN UINTN Step);
+ #include <Library/PeCoffLib.h>
+ #include <Library/HobLib.h>
+ #include <Library/PcdLib.h>
+@@ -908,7 +911,9 @@ BuildMemoryTypeInformationHob (
+   Info[5].Type          = EfiMaxMemoryType;
+   Info[5].NumberOfPages = 0;
+ 
++  SecBeaconHook (0x5A);
+   BuildGuidDataHob (&gEfiMemoryTypeInformationGuid, &Info, sizeof (Info));
++  SecBeaconHook (0x5B);
+ }
+ 
+ /**
+diff --git a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
+index 5bba6ea..8ad07ce 100644
+--- a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
++++ b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
+@@ -6,6 +6,8 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ **/
+ 
++#include <Library/UefiRuntimeServicesTableLib.h>
++
+ #include "BootManagerMenu.h"
+ 
+ EFI_HII_HANDLE  gStringPackHandle;
+@@ -344,9 +346,9 @@ IgnoreBootOption (
+   }
+ 
+   //
+-  // Ignore the hidden/inactive boot option.
++  // Ignore "UEFI Misc Device" boot options.
+   //
+-  if (((BootOption->Attributes & LOAD_OPTION_HIDDEN) != 0) || ((BootOption->Attributes & LOAD_OPTION_ACTIVE) == 0)) {
++  if (BootOption->Description != NULL && StrnCmp (BootOption->Description, L"UEFI Misc Device", 16) == 0) {
+     return TRUE;
+   }
+ 
+@@ -379,7 +381,7 @@ InitializeBootMenuData (
+   }
+ 
+   BootMenuData->TitleToken[0] = STRING_TOKEN (STR_BOOT_POPUP_MENU_TITLE_STRING);
+-  BootMenuData->PtrTokens     = AllocateZeroPool (BootOptionCount * sizeof (EFI_STRING_ID));
++  BootMenuData->PtrTokens     = AllocateZeroPool ((BootOptionCount + 2) * sizeof (EFI_STRING_ID));
+   ASSERT (BootMenuData->PtrTokens != NULL);
+ 
+   //
+@@ -399,10 +401,19 @@ InitializeBootMenuData (
+                                             );
+   }
+ 
++  //
++  // Add Power Off Option
++  //
++  BootMenuData->PtrTokens[StrIndex++] = HiiSetString (gStringPackHandle, 0, L"Power Off", NULL);
++
++  //
++  // Add Exit Option
++  //
++  BootMenuData->PtrTokens[StrIndex++] = HiiSetString (gStringPackHandle, 0, L"Exit", NULL);
++
+   BootMenuData->ItemCount    = StrIndex;
+   BootMenuData->HelpToken[0] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP1_STRING);
+   BootMenuData->HelpToken[1] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP2_STRING);
+-  BootMenuData->HelpToken[2] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP3_STRING);
+   InitializeBootMenuScreen (BootMenuData);
+   BootMenuData->SelectItem = 0;
+   return EFI_SUCCESS;
+@@ -468,7 +479,7 @@ BootMenuSelectItem (
+       BootMenuData->ScrollBarControl.LastItem  = WantSelectItem;
+     }
+ 
+-    gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLUE);
++    gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
+     FirstItem   = BootMenuData->ScrollBarControl.FirstItem;
+     LastItem    = BootMenuData->ScrollBarControl.LastItem;
+     TopShadeNum = 0;
+@@ -539,7 +550,7 @@ BootMenuSelectItem (
+   //
+   FirstItem = BootMenuData->ScrollBarControl.FirstItem;
+   if ((WantSelectItem != BootMenuData->SelectItem) && !RePaintItems) {
+-    gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLUE);
++    gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
+     String   = HiiGetString (gStringPackHandle, BootMenuData->PtrTokens[BootMenuData->SelectItem], NULL);
+     PrintCol = StartCol  + 1;
+     PrintRow = StartRow + 3 + BootMenuData->SelectItem - FirstItem;
+@@ -550,7 +561,7 @@ BootMenuSelectItem (
+   //
+   // Print want to select item
+   //
+-  gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
++  gST->ConOut->SetAttribute (gST->ConOut, EFI_BLACK | EFI_BACKGROUND_LIGHTGRAY);
+   String   = HiiGetString (gStringPackHandle, BootMenuData->PtrTokens[WantSelectItem], NULL);
+   PrintCol = StartCol  + 1;
+   PrintRow = StartRow + TITLE_TOKEN_COUNT + 2 + WantSelectItem - FirstItem;
+@@ -589,7 +600,7 @@ DrawBootPopupMenu (
+   gST->ConOut->ClearScreen (gST->ConOut);
+ 
+   SavedAttribute = gST->ConOut->Mode->Attribute;
+-  gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLUE);
++  gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
+   Width              = BootMenuData->MenuScreen.Width;
+   StartCol           = BootMenuData->MenuScreen.StartCol;
+   StartRow           = BootMenuData->MenuScreen.StartRow;
+@@ -754,6 +765,16 @@ BootFromSelectOption (
+       break;
+     }
+   }
++
++  // Power Off
++  if (SelectItem == ItemNum) {
++    gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
++  }
++
++  // Exit
++  if (SelectItem == ItemNum + 1) {
++    gBS->Exit (gImageHandle, EFI_SUCCESS, 0, NULL);
++  }
+ }
+ 
+ /**
+diff --git a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
+index 697a44a..8b45ad1 100644
+--- a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
++++ b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
+@@ -22,7 +22,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Protocol/BootLogo.h>
+ 
+ #define TITLE_TOKEN_COUNT  1
+-#define HELP_TOKEN_COUNT   3
++#define HELP_TOKEN_COUNT   2
+ 
+ typedef struct _BOOT_MENU_SCREEN {
+   UINTN    StartCol;
+diff --git a/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBus.h b/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBus.h
+index d775ca1..e229b16 100644
+--- a/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBus.h
++++ b/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBus.h
+@@ -133,10 +133,10 @@ typedef struct _USB_HUB_API    USB_HUB_API;
+ #define USB_CLEAR_FEATURE_REQUEST_TIMEOUT  10
+ 
+ //
+-// Bus raises TPL to TPL_NOTIFY to serialize all its operations
++// Bus raises TPL to TPL_CALLBACK to serialize all its operations
+ // to protect shared data structures.
+ //
+-#define  USB_BUS_TPL  TPL_NOTIFY
++#define  USB_BUS_TPL  TPL_CALLBACK
+ 
+ #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
+ #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
+diff --git a/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c b/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
+index 3c20568..5ee0086 100644
+--- a/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
++++ b/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
+@@ -7,6 +7,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ **/
+ 
+ #include "DxeMain.h"
++#include <Library/EvergoTrace.h>
+ 
+ //
+ // DXE Core Global Variables for Protocols from PEI
+@@ -219,6 +220,71 @@ EFI_DECOMPRESS_PROTOCOL  gEfiDecompress = {
+ //
+ GLOBAL_REMOVE_IF_UNREFERENCED EFI_LOAD_FIXED_ADDRESS_CONFIGURATION_TABLE  gLoadModuleAtFixAddressConfigurationTable = { 0, 0 };
+ 
++#ifdef EVERGO_SEC_BEACONS
++//
++// evergo Test-D: DXE-phase beacon, same reserved ramoops page the SEC uses
++// (0x4811FC00). Self-contained (no link dependency on Sec): writes magic+step,
++// kicks the armed 15 s watchdog and cleans the cache so the value survives the
++// watchdog reset. Steps 0x90.. bisect DxeMain's early services; the last step
++// shows where DXE stops making progress.
++//
++#define DXE_BEACON_BASE  0x4811FC00ULL
++#define DXE_BEACON_MIRROR 0xB6BE0000ULL  /* reserved payload window copy */
++#define DXE_TOPRGU_BASE  0x10007000ULL
++
++STATIC
++VOID
++DxeBeacon (
++  IN UINTN  Step
++  )
++{
++  volatile UINT64 *Beacon = (volatile UINT64 *)DXE_BEACON_BASE;
++  volatile UINT32 *Wdt    = (volatile UINT32 *)DXE_TOPRGU_BASE;
++  UINTN            Line;
++
++  TRC (TRC_DXE_STEP + Step, TRC_ENTER, 0, Step, 0, 0, 0);
++  Beacon[0] = 0x53473142ULL;
++  Beacon[1] = (UINT64)Step;
++  {
++    volatile UINT64 *Mirror = (volatile UINT64 *)DXE_BEACON_MIRROR;
++    Mirror[0] = 0x53473142ULL;
++    Mirror[1] = (UINT64)Step;
++  }
++  asm volatile ("dsb sy" ::: "memory");
++  Wdt[2] = 0x1971;                    /* WDT_RST reload */
++  asm volatile ("dsb sy" ::: "memory");
++  for (Line = 0; Line < 512; Line += 64) {
++    asm volatile ("dc cvac, %0" :: "r" ((UINTN)DXE_BEACON_BASE + Line));
++  }
++  asm volatile ("dsb sy" ::: "memory");
++}
++
++/* evergo container watch: record the XNUP magic at 0xB5400000 into beacon
++ * slots 27/28 (T4/T5), free per Sec.c layout (SEC uses 0-26; BDS/loader 0-17).
++ * T4 = DxeMain entry (0x90), T5 = dispatcher start (0x98). */
++STATIC
++VOID
++DxeContainerSnapshot (
++  IN UINTN  SlotIdx
++  )
++{
++  volatile UINT32 *Cont = (volatile UINT32 *)0xB5400000ULL;
++  /* slots 32+ (offsets +256..) are beyond the SEC HOB-summary's 256B region:
++   * T4(idx1)->slot33, T5->34, T8->35, T9->36. All within the 4KB page. */
++  volatile UINT64 *Slot = (volatile UINT64 *)(DXE_BEACON_BASE + (32 + SlotIdx) * 8);
++
++  Slot[0] = ((UINT64)Cont[1] << 32) | Cont[0];
++  asm volatile ("dsb sy" ::: "memory");
++  {
++    UINTN L2;
++    for (L2 = 0; L2 < 256; L2 += 64) {
++      asm volatile ("dc cvac, %0" :: "r" ((UINTN)DXE_BEACON_BASE + L2));
++    }
++    asm volatile ("dsb sy" ::: "memory");
++  }
++}
++#endif
++
+ // Main entry point to the DXE Core
+ //
+ 
+@@ -246,6 +312,15 @@ DxeMain (
+   EFI_VECTOR_HANDOFF_INFO       *VectorInfo;
+   VOID                          *EntryPoint;
+ 
++  //
++  // evergo Test-D: mark DXE Core entry (step 0x90) and bisect the early
++  // services; each beacon re-kicks the armed watchdog.
++  //
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x90);
++  DxeContainerSnapshot (1);  /* T4: DxeMain entry */
++#endif
++
+   //
+   // Setup the default exception handlers
+   //
+@@ -257,22 +332,35 @@ DxeMain (
+ 
+   Status = InitializeCpuExceptionHandlers (VectorInfoList);
+   ASSERT_EFI_ERROR (Status);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x91);
++#endif
+ 
+   //
+   // Setup Exception Stack
+   //
+   Status = InitializeSeparateExceptionStacks (NULL, NULL);
+   ASSERT_EFI_ERROR (Status);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x92);
++  DxeContainerSnapshot (3);  /* T8: after exception stack init */
++#endif
+ 
+   //
+   // Initialize Debug Agent to support source level debug in DXE phase
+   //
+   InitializeDebugAgent (DEBUG_AGENT_INIT_DXE_CORE, HobStart, NULL);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x93);
++#endif
+ 
+   //
+   // Initialize Memory Services
+   //
+   CoreInitializeMemoryServices (&HobStart, &MemoryBaseAddress, &MemoryLength);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x94);
++#endif
+ 
+   MemoryProfileInit (HobStart);
+ 
+@@ -281,6 +369,10 @@ DxeMain (
+   //
+   Status = CoreInitializeHandleServices ();
+   ASSERT_EFI_ERROR (Status);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x95);
++  DxeContainerSnapshot (4);  /* T9: after 0x95 init */
++#endif
+ 
+   //
+   // Start the Image Services.
+@@ -296,6 +388,9 @@ DxeMain (
+   //
+   Status = CoreInitializeGcdServices (&HobStart, MemoryBaseAddress, MemoryLength);
+   ASSERT_EFI_ERROR (Status);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x97);
++#endif
+ 
+   //
+   // Allocate the EFI System Table and EFI Runtime Service Table from EfiRuntimeServicesData
+@@ -398,11 +493,11 @@ DxeMain (
+     gDxeCoreImageHandle
+     );
+ 
+-  DEBUG ((DEBUG_INFO | DEBUG_LOAD, "HOBLIST address in DXE = 0x%p\n", HobStart));
+ 
+   DEBUG_CODE_BEGIN ();
+   EFI_PEI_HOB_POINTERS  Hob;
+ 
++#if 0
+   for (Hob.Raw = HobStart; !END_OF_HOB_LIST (Hob); Hob.Raw = GET_NEXT_HOB (Hob)) {
+     if (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_MEMORY_ALLOCATION) {
+       DEBUG ((
+@@ -414,6 +509,7 @@ DxeMain (
+         ));
+     }
+   }
++#endif
+ 
+   for (Hob.Raw = HobStart; !END_OF_HOB_LIST (Hob); Hob.Raw = GET_NEXT_HOB (Hob)) {
+     if (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_FV) {
+@@ -547,7 +643,15 @@ DxeMain (
+   //
+   // Invoke the DXE Dispatcher
+   //
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x98);   // dispatcher starting; per-driver hangs show up here
++  DxeContainerSnapshot (2);  /* T5: dispatcher start */
++#endif
+   CoreDispatcher ();
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x99);   // initial dispatcher returned; individual driver status is separate
++  DxeContainerSnapshot (5);  /* T10: after dispatcher (all drivers loaded) */
++#endif
+ 
+   //
+   // Display Architectural protocols that were not loaded if this is DEBUG build
+@@ -578,6 +682,14 @@ DxeMain (
+       );
+   }
+ 
++#ifdef EVERGO_SEC_BEACONS
++  //
++  // evergo Test-D: distinguish "all architectural protocols present" from
++  // "missing -> ASSERT_EFI_ERROR -> CpuDeadLoop". Without this, both cases
++  // leave the beacon at 0x99 and are indistinguishable after a reset.
++  //
++  DxeBeacon (EFI_ERROR (Status) ? 0x9B : 0x9A);
++#endif
+   ASSERT_EFI_ERROR (Status);
+ 
+   //
+@@ -588,6 +700,10 @@ DxeMain (
+     (EFI_SOFTWARE_DXE_CORE | EFI_SW_DXE_CORE_PC_HANDOFF_TO_NEXT)
+     );
+ 
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0x9C);   // about to call gBds->Entry (BDS dispatch)
++#endif
++
+   //
+   // Transfer control to the BDS Architectural Protocol
+   //
+diff --git a/MdeModulePkg/Core/Dxe/Image/Image.c b/MdeModulePkg/Core/Dxe/Image/Image.c
+index eb2ce42..449cbae 100644
+--- a/MdeModulePkg/Core/Dxe/Image/Image.c
++++ b/MdeModulePkg/Core/Dxe/Image/Image.c
+@@ -6,6 +6,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ **/
+ 
++#include <Library/EvergoTrace.h>
+ #include "DxeMain.h"
+ #include "Image.h"
+ #include "MemoryProtectionSupport.h" // MU_CHANGE
+@@ -721,6 +722,9 @@ CoreLoadPeImage (
+                    );
+       }
+     } else {
++      TRC (0x0A1, TRC_ENTER, 0,
++           Image->ImageContext.ImageAddress, Image->NumberOfPages,
++           (UINT64)Image->ImageContext.ImageCodeMemoryType, 0);
+       if ((PcdGetBool (PcdImageLargeAddressLoad) && ((Image->ImageContext.ImageAddress) >= 0x100000)) ||
+           Image->ImageContext.RelocationsStripped)
+       {
+@@ -730,15 +734,18 @@ CoreLoadPeImage (
+                    Image->NumberOfPages,
+                    &Image->ImageContext.ImageAddress
+                    );
++        TRC (0x0A2, TRC_EXIT, Status, Image->ImageContext.ImageAddress, 0, 0, 0);
+       }
+ 
+       if (EFI_ERROR (Status) && !Image->ImageContext.RelocationsStripped) {
++        TRC (0x0A3, TRC_ENTER, 0, 0, 0, 0, 0);
+         Status = CoreAllocatePages (
+                    AllocateAnyPages,
+                    (EFI_MEMORY_TYPE)(Image->ImageContext.ImageCodeMemoryType),
+                    Image->NumberOfPages,
+                    &Image->ImageContext.ImageAddress
+                    );
++        TRC (0x0A4, TRC_EXIT, Status, Image->ImageContext.ImageAddress, 0, 0, 0);
+       }
+     }
+ 
+@@ -783,7 +790,9 @@ CoreLoadPeImage (
+   //
+   // Load the image from the file into the allocated memory
+   //
++  TRC (0x0A5, TRC_ENTER, 0, Image->ImageContext.ImageAddress, 0, 0, 0);
+   Status = PeCoffLoaderLoadImage (&Image->ImageContext);
++  TRC (0x0A5, TRC_EXIT, Status, 0, 0, 0, 0);
+   if (EFI_ERROR (Status)) {
+     goto Done;
+   }
+@@ -806,7 +815,9 @@ CoreLoadPeImage (
+   //
+   // Relocate the image in memory
+   //
++  TRC (0x0A6, TRC_ENTER, 0, 0, 0, 0, 0);
+   Status = PeCoffLoaderRelocateImage (&Image->ImageContext);
++  TRC (0x0A6, TRC_EXIT, Status, 0, 0, 0, 0);
+   if (EFI_ERROR (Status)) {
+     goto Done;
+   }
+@@ -814,7 +825,9 @@ CoreLoadPeImage (
+   //
+   // Flush the Instruction Cache
+   //
++  TRC (0x0A7, TRC_ENTER, 0, 0, 0, 0, 0);
+   InvalidateInstructionCacheRange ((VOID *)(UINTN)Image->ImageContext.ImageAddress, (UINTN)Image->ImageContext.ImageSize);
++  TRC (0x0A7, TRC_EXIT, 0, 0, 0, 0, 0);
+ 
+   //
+   // Copy the machine type from the context to the image private data.
+@@ -864,6 +877,7 @@ CoreLoadPeImage (
+   // Print the load address and the PDB file name if it is available
+   //
+ 
++  TRC (0x0A8, TRC_ENTER, 0, 0, 0, 0, 0);
+   DEBUG ((
+     DEBUG_INFO | DEBUG_LOAD,
+     "Loading driver at 0x%11p EntryPoint=0x%11p ",
+@@ -1428,6 +1442,8 @@ CoreLoadImageCommon (
+     goto Done;
+   }
+ 
++  TRC (0x0A9, TRC_EXIT, 0, 0, 0, 0, 0);   /* LoadPeImage returned OK */
++
+   if (NumberOfPages != NULL) {
+     *NumberOfPages = Image->NumberOfPages;
+   }
+@@ -1452,6 +1468,7 @@ CoreLoadImageCommon (
+   //
+   // Reinstall loaded image protocol to fire any notifications
+   //
++  TRC (0x0AA, TRC_ENTER, 0, 0, 0, 0, 0);   /* about to fire LoadedImage notifications */
+   Status = CoreReinstallProtocolInterface (
+              Image->Handle,
+              &gEfiLoadedImageProtocolGuid,
+diff --git a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+index d3c1dff..5012179 100644
+--- a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
++++ b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+@@ -16,6 +16,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include "Language.h"
+ #include "HwErrRecSupport.h"
+ #include <Library/VariablePolicyHelperLib.h>
++#include <Library/EvergoTrace.h>
+ 
+ #define SET_BOOT_OPTION_SUPPORT_KEY_COUNT(a, c)  { \
+       (a) = ((a) & ~EFI_BOOT_OPTION_SUPPORT_COUNT) | (((c) << LowBitSet32 (EFI_BOOT_OPTION_SUPPORT_COUNT)) & EFI_BOOT_OPTION_SUPPORT_COUNT); \
+@@ -678,6 +679,44 @@ BdsFormalizeEfiGlobalVariable (
+   @param This             Protocol Instance structure.
+ 
+ **/
++#ifdef EVERGO_SEC_BEACONS
++//
++// evergo Test-D: DXE-phase beacon (same layout as the DxeCore copy - this is
++// a separate module, so it carries its own self-contained implementation).
++//
++#define DXE_BEACON_BASE  0x4811FC00ULL
++#define DXE_BEACON_MIRROR 0xB6BE0000ULL  /* reserved payload window copy */
++#define DXE_TOPRGU_BASE  0x10007000ULL
++
++STATIC
++VOID
++DxeBeacon (
++  IN UINTN  Step
++  )
++{
++  volatile UINT64 *Beacon = (volatile UINT64 *)DXE_BEACON_BASE;
++  volatile UINT32 *Wdt    = (volatile UINT32 *)DXE_TOPRGU_BASE;
++  UINTN            Line;
++
++  TRC (TRC_BDS_STEP + Step, TRC_ENTER, 0, Step, 0, 0, 0);
++  Beacon[0] = 0x53473142ULL;
++  Beacon[1] = (UINT64)Step;
++  {
++    volatile UINT64 *Mirror = (volatile UINT64 *)DXE_BEACON_MIRROR;
++    Mirror[0] = 0x53473142ULL;
++    Mirror[1] = (UINT64)Step;
++  }
++  asm volatile ("dsb sy" ::: "memory");
++  Wdt[2] = 0x1971;
++  asm volatile ("dsb sy" ::: "memory");
++  for (Line = 0; Line < 256; Line += 64) {
++    asm volatile ("dc cvac, %0" :: "r" ((UINTN)DXE_BEACON_BASE + Line));
++  }
++  asm volatile ("dsb sy" ::: "memory");
++}
++#endif
++
++
+ VOID
+ EFIAPI
+ BdsEntry (
+@@ -718,6 +757,9 @@ BdsEntry (
+   PERF_CROSSMODULE_BEGIN ("BDS");
+   DEBUG ((DEBUG_INFO, "[Bds] Entry...\n"));
+   PlatformBootManagerBdsEntry ();             // MU_CHANGE 00076 - Signal start of BDS
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA0);   // BdsEntry started
++#endif
+ 
+   //
+   // Fill in FirmwareVendor and FirmwareRevision from PCDs
+@@ -926,6 +968,9 @@ BdsEntry (
+   PERF_INMODULE_BEGIN ("PlatformBootManagerBeforeConsole");
+   PlatformBootManagerBeforeConsole ();
+   PERF_INMODULE_END ("PlatformBootManagerBeforeConsole");
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA1);   // BeforeConsole done
++#endif
+ 
+   //
+   // Initialize hotkey service
+@@ -954,6 +999,9 @@ BdsEntry (
+   } else {
+     EfiBootManagerConnectAllDefaultConsoles ();
+   }
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA2);   // console connection calls returned; status not recorded
++#endif
+ 
+   PERF_INMODULE_END ("EfiBootManagerConnectAllDefaultConsoles");
+ 
+@@ -971,6 +1019,9 @@ BdsEntry (
+   PERF_INMODULE_BEGIN ("PlatformBootManagerAfterConsole");
+   PlatformBootManagerAfterConsole ();
+   PERF_INMODULE_END ("PlatformBootManagerAfterConsole");
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA3);   // AfterConsole returned; GOP/logo success is not established
++#endif
+ 
+   //
+   // If any component set PcdTestKeyUsed to TRUE because use of a test key
+@@ -998,6 +1049,9 @@ BdsEntry (
+     OsIndication = 0;
+   }
+ 
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA4);   // OsIndications read; BDS tail starts here
++#endif
+   DEBUG_CODE_BEGIN ();
+   EFI_BOOT_MANAGER_LOAD_OPTION_TYPE  LoadOptionType;
+ 
+@@ -1031,6 +1085,9 @@ BdsEntry (
+   // BootManagerMenu doesn't contain the correct information when return status is EFI_NOT_FOUND.
+   //
+   BootManagerMenuStatus = EfiBootManagerGetBootManagerMenu (&BootManagerMenu);
++#ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA5);   // boot-manager-menu discovery returned
++#endif
+ 
+   BootFwUi         = (BOOLEAN)((OsIndication & EFI_OS_INDICATIONS_BOOT_TO_FW_UI) != 0);
+   PlatformRecovery = (BOOLEAN)((OsIndication & EFI_OS_INDICATIONS_START_PLATFORM_RECOVERY) != 0);
+@@ -1082,9 +1139,15 @@ BdsEntry (
+     //
+     // Execute Key####
+     //
++    #ifdef EVERGO_SEC_BEACONS
++    DxeBeacon (0xA6);   // entering BdsWait (boot-timeout countdown)
++    #endif
+     PERF_INMODULE_BEGIN ("BdsWait");
+     BdsWait (HotkeyTriggered);
+     PERF_INMODULE_END ("BdsWait");
++    #ifdef EVERGO_SEC_BEACONS
++    DxeBeacon (0xA7);   // BdsWait returned; hotkeys/priority boot next
++    #endif
+     //
+     // BdsReadKeys() can be removed after all keyboard drivers invoke callback in timer callback.
+     //
+@@ -1138,6 +1201,9 @@ BdsEntry (
+       // If infinite retries is enabled, always retry. This allows a continuous loop over all boot options.
+       //
+       BootSuccess = FALSE;
++      #ifdef EVERGO_SEC_BEACONS
++      DxeBeacon (0xA8);   // about to attempt BootOrder entries
++      #endif
+       LoadOptions = EfiBootManagerGetLoadOptions (&LoadOptionCount, LoadOptionTypeBoot);
+       if (LoadOptions != NULL) {
+         BootSuccess = BootBootOptions (LoadOptions, LoadOptionCount, (BootManagerMenuStatus != EFI_NOT_FOUND) ? &BootManagerMenu : NULL);
+@@ -1172,6 +1238,9 @@ BdsEntry (
+   }
+ 
+   DEBUG ((DEBUG_ERROR, "[Bds] Unable to boot!\n"));
++  #ifdef EVERGO_SEC_BEACONS
++  DxeBeacon (0xA9);   // no boot option succeeded; about to shut down
++  #endif
+   PlatformBootManagerUnableToBoot ();
+   CpuDeadLoop ();
+ }
+diff --git a/MdePkg/Include/AArch64/AsmMacroLib.h b/MdePkg/Include/AArch64/AsmMacroLib.h
+index ccd8343..439b96b 100644
+--- a/MdePkg/Include/AArch64/AsmMacroLib.h
++++ b/MdePkg/Include/AArch64/AsmMacroLib.h
+@@ -37,10 +37,10 @@
+   Name:                                           ; \
+   AARCH64_BTI(c)
+ 
+-#define ASM_FUNC(Name)  _ASM_FUNC(ASM_PFX(Name), .text. ## Name)
++#define ASM_FUNC(Name)  _ASM_FUNC(ASM_PFX(Name), .text)
+ 
+ #define ASM_FUNC_ALIGN(Name, Align)  \
+-  _ASM_FUNC_ALIGN(ASM_PFX(Name), .text. ## Name, Align)
++  _ASM_FUNC_ALIGN(ASM_PFX(Name), .text, Align)
+ 
+ #define MOV32(Reg, Val)                             \
+   movz      Reg, ((Val) >> 16) & 0xffff, lsl #16  ; \
+diff --git a/SecurityPkg/Library/AuthVariableLib/AuthService.c b/SecurityPkg/Library/AuthVariableLib/AuthService.c
+index d6e9f9f..3bec1ee 100644
+--- a/SecurityPkg/Library/AuthVariableLib/AuthService.c
++++ b/SecurityPkg/Library/AuthVariableLib/AuthService.c
+@@ -29,6 +29,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ #include <Protocol/VariablePolicy.h>
+ #include <Library/VariablePolicyLib.h>
++#include <Library/UefiRuntimeLib.h>
+ 
+ #define SHA_DIGEST_SIZE_MAX  SHA512_DIGEST_SIZE
+ 
+@@ -2570,6 +2571,10 @@ VerifyTimeBasedPayloadAndUpdate (
+   AUTH_VARIABLE_INFO             OrgVariableInfo;
+   BOOLEAN                        IsDel;
+ 
++  if (EfiAtRuntime ()) {
++    return EFI_WRITE_PROTECTED;
++  }
++
+   ZeroMem (&OrgVariableInfo, sizeof (OrgVariableInfo));
+   FindStatus = mAuthVarLibContextIn->FindVariable (
+                                        VariableName,
+diff --git a/SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf b/SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
+index 0b0f0a9..0f605de 100644
+--- a/SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
++++ b/SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
+@@ -43,6 +43,7 @@
+   BaseCryptLib
+   PlatformSecureLib
+   VariablePolicyLib
++  UefiRuntimeLib
+ 
+ # MU_CHANGE [BEGIN] - TCBZ2506
+ [FeaturePcd]
+diff --git a/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/CpuExceptionHandlerLib.c b/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/CpuExceptionHandlerLib.c
+index 9116ba9..8ab37ee 100644
+--- a/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/CpuExceptionHandlerLib.c
++++ b/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/CpuExceptionHandlerLib.c
+@@ -44,6 +44,35 @@ STATIC CHAR8  *mExceptionTypeString[] = {
+ 
+ STATIC BOOLEAN  mRecursiveException;
+ 
++STATIC
++VOID
++SerialWriteAscii (
++  IN CONST CHAR8  *Text
++  )
++{
++  while (*Text != '\0') {
++    SerialPortWrite ((UINT8 *)Text, 1);
++    Text++;
++  }
++}
++
++STATIC
++VOID
++SerialWriteHex32 (
++  IN UINT32  Value
++  )
++{
++  STATIC CONST CHAR8  Hex[] = "0123456789ABCDEF";
++  CHAR8               Text[8];
++  UINTN               Index;
++
++  for (Index = 0; Index < ARRAY_SIZE (Text); Index++) {
++    Text[Index] = Hex[(Value >> ((ARRAY_SIZE (Text) - Index - 1) * 4)) & 0xF];
++  }
++
++  SerialPortWrite ((UINT8 *)Text, sizeof (Text));
++}
++
+ /**
+   Decodes and logs the fault cause of an Instruction or Data Abort
+   by mapping the Fault Status Code bits [5:0] of the ISS field to
+@@ -148,6 +177,7 @@ DescribeInstructionOrDataAbort (
+                    Syndrome (ISS).
+ **/
+ STATIC
++__attribute__((unused))
+ VOID
+ DescribeExceptionSyndrome (
+   IN UINT64  Esr
+@@ -192,6 +222,7 @@ DescribeExceptionSyndrome (
+            memory within the original FullName buffer.
+ **/
+ STATIC
++__attribute__((unused))
+ CONST CHAR8 *
+ BaseName (
+   IN  CONST CHAR8  *FullName
+@@ -291,151 +322,32 @@ DumpCpuContext (
+   IN OUT EFI_SYSTEM_CONTEXT  SystemContext
+   )
+ {
+-  CHAR8   Buffer[MAX_PRINT_CHARS];
+-  CHAR16  UnicodeBuffer[MAX_PRINT_CHARS];
+-  UINTN   CharCount;
+-  INT32   Offset;
+-
+   if (mRecursiveException) {
+-    STATIC CHAR8 CONST  Message[] = "\nRecursive exception occurred while dumping the CPU state\n";
+-    SerialPortWrite ((UINT8 *)Message, sizeof Message - 1);
++    SerialWriteAscii ("\fRECURSIVE EXCEPTION\n");
+     CpuDeadLoop ();
+   }
+ 
+   mRecursiveException = TRUE;
+ 
+-  CharCount = AsciiSPrint (Buffer, sizeof (Buffer), "\n\n%a Exception at 0x%016lx\n", mExceptionTypeString[ExceptionType], SystemContext.SystemContextAArch64->ELR);
+-  SerialPortWrite ((UINT8 *)Buffer, CharCount);
+-
+-  // Prepare a unicode buffer for ConOut, if applicable, in case the buffer
+-  // gets reused.
+-  UnicodeSPrintAsciiFormat (UnicodeBuffer, MAX_PRINT_CHARS, Buffer);
+-
+-  DEBUG_CODE_BEGIN ();
+-  CHAR8   *Pdb, *PrevPdb;
+-  UINTN   ImageBase;
+-  UINTN   PeCoffSizeOfHeader;
+-  UINT64  *Fp;
+-  UINT64  RootFp[2];
+-  UINTN   Idx;
+-
+-  PrevPdb = Pdb = GetImageName (SystemContext.SystemContextAArch64->ELR, &ImageBase, &PeCoffSizeOfHeader);
+-  if (Pdb != NULL) {
+-    DEBUG ((
+-      DEBUG_ERROR,
+-      "PC 0x%012lx (0x%012lx+0x%08x) [ 0] %a\n",
+-      SystemContext.SystemContextAArch64->ELR,
+-      ImageBase,
+-      SystemContext.SystemContextAArch64->ELR - ImageBase,
+-      BaseName (Pdb)
+-      ));
+-  } else {
+-    DEBUG ((DEBUG_ERROR, "PC 0x%012lx\n", SystemContext.SystemContextAArch64->ELR));
+-  }
+-
+-  if ((UINT64 *)SystemContext.SystemContextAArch64->FP != 0) {
+-    Idx = 0;
+-
+-    RootFp[0] = ((UINT64 *)SystemContext.SystemContextAArch64->FP)[0];
+-    RootFp[1] = ((UINT64 *)SystemContext.SystemContextAArch64->FP)[1];
+-    if (RootFp[1] != SystemContext.SystemContextAArch64->LR) {
+-      RootFp[0] = SystemContext.SystemContextAArch64->FP;
+-      RootFp[1] = SystemContext.SystemContextAArch64->LR;
+-    }
+-
+-    for (Fp = RootFp; Fp[0] != 0; Fp = (UINT64 *)Fp[0]) {
+-      Pdb = GetImageName (Fp[1], &ImageBase, &PeCoffSizeOfHeader);
+-      if (Pdb != NULL) {
+-        if (Pdb != PrevPdb) {
+-          Idx++;
+-          PrevPdb = Pdb;
+-        }
+-
+-        DEBUG ((
+-          DEBUG_ERROR,
+-          "PC 0x%012lx (0x%012lx+0x%08x) [% 2d] %a\n",
+-          Fp[1],
+-          ImageBase,
+-          Fp[1] - ImageBase,
+-          Idx,
+-          BaseName (Pdb)
+-          ));
+-      } else {
+-        DEBUG ((DEBUG_ERROR, "PC 0x%012lx\n", Fp[1]));
+-      }
+-    }
+-
+-    PrevPdb = Pdb = GetImageName (SystemContext.SystemContextAArch64->ELR, &ImageBase, &PeCoffSizeOfHeader);
+-    if (Pdb != NULL) {
+-      DEBUG ((DEBUG_ERROR, "\n[ 0] %a\n", Pdb));
+-    }
+-
+-    Idx = 0;
+-    for (Fp = RootFp; Fp[0] != 0; Fp = (UINT64 *)Fp[0]) {
+-      Pdb = GetImageName (Fp[1], &ImageBase, &PeCoffSizeOfHeader);
+-      if ((Pdb != NULL) && (Pdb != PrevPdb)) {
+-        DEBUG ((DEBUG_ERROR, "[% 2d] %a\n", ++Idx, Pdb));
+-        PrevPdb = Pdb;
+-      }
+-    }
+-  }
+-
+-  DEBUG_CODE_END ();
+-
+-  DEBUG ((DEBUG_ERROR, "\n  X0 0x%016lx   X1 0x%016lx   X2 0x%016lx   X3 0x%016lx\n", SystemContext.SystemContextAArch64->X0, SystemContext.SystemContextAArch64->X1, SystemContext.SystemContextAArch64->X2, SystemContext.SystemContextAArch64->X3));
+-  DEBUG ((DEBUG_ERROR, "  X4 0x%016lx   X5 0x%016lx   X6 0x%016lx   X7 0x%016lx\n", SystemContext.SystemContextAArch64->X4, SystemContext.SystemContextAArch64->X5, SystemContext.SystemContextAArch64->X6, SystemContext.SystemContextAArch64->X7));
+-  DEBUG ((DEBUG_ERROR, "  X8 0x%016lx   X9 0x%016lx  X10 0x%016lx  X11 0x%016lx\n", SystemContext.SystemContextAArch64->X8, SystemContext.SystemContextAArch64->X9, SystemContext.SystemContextAArch64->X10, SystemContext.SystemContextAArch64->X11));
+-  DEBUG ((DEBUG_ERROR, " X12 0x%016lx  X13 0x%016lx  X14 0x%016lx  X15 0x%016lx\n", SystemContext.SystemContextAArch64->X12, SystemContext.SystemContextAArch64->X13, SystemContext.SystemContextAArch64->X14, SystemContext.SystemContextAArch64->X15));
+-  DEBUG ((DEBUG_ERROR, " X16 0x%016lx  X17 0x%016lx  X18 0x%016lx  X19 0x%016lx\n", SystemContext.SystemContextAArch64->X16, SystemContext.SystemContextAArch64->X17, SystemContext.SystemContextAArch64->X18, SystemContext.SystemContextAArch64->X19));
+-  DEBUG ((DEBUG_ERROR, " X20 0x%016lx  X21 0x%016lx  X22 0x%016lx  X23 0x%016lx\n", SystemContext.SystemContextAArch64->X20, SystemContext.SystemContextAArch64->X21, SystemContext.SystemContextAArch64->X22, SystemContext.SystemContextAArch64->X23));
+-  DEBUG ((DEBUG_ERROR, " X24 0x%016lx  X25 0x%016lx  X26 0x%016lx  X27 0x%016lx\n", SystemContext.SystemContextAArch64->X24, SystemContext.SystemContextAArch64->X25, SystemContext.SystemContextAArch64->X26, SystemContext.SystemContextAArch64->X27));
+-  DEBUG ((DEBUG_ERROR, " X28 0x%016lx   FP 0x%016lx   LR 0x%016lx  \n", SystemContext.SystemContextAArch64->X28, SystemContext.SystemContextAArch64->FP, SystemContext.SystemContextAArch64->LR));
+-
+-  /* We save these as 128bit numbers, but have to print them as two 64bit numbers,
+-     so swap the 64bit words to correctly represent a 128bit number.  */
+-  DEBUG ((DEBUG_ERROR, "\n  V0 0x%016lx %016lx   V1 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V0[1], SystemContext.SystemContextAArch64->V0[0], SystemContext.SystemContextAArch64->V1[1], SystemContext.SystemContextAArch64->V1[0]));
+-  DEBUG ((DEBUG_ERROR, "  V2 0x%016lx %016lx   V3 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V2[1], SystemContext.SystemContextAArch64->V2[0], SystemContext.SystemContextAArch64->V3[1], SystemContext.SystemContextAArch64->V3[0]));
+-  DEBUG ((DEBUG_ERROR, "  V4 0x%016lx %016lx   V5 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V4[1], SystemContext.SystemContextAArch64->V4[0], SystemContext.SystemContextAArch64->V5[1], SystemContext.SystemContextAArch64->V5[0]));
+-  DEBUG ((DEBUG_ERROR, "  V6 0x%016lx %016lx   V7 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V6[1], SystemContext.SystemContextAArch64->V6[0], SystemContext.SystemContextAArch64->V7[1], SystemContext.SystemContextAArch64->V7[0]));
+-  DEBUG ((DEBUG_ERROR, "  V8 0x%016lx %016lx   V9 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V8[1], SystemContext.SystemContextAArch64->V8[0], SystemContext.SystemContextAArch64->V9[1], SystemContext.SystemContextAArch64->V9[0]));
+-  DEBUG ((DEBUG_ERROR, " V10 0x%016lx %016lx  V11 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V10[1], SystemContext.SystemContextAArch64->V10[0], SystemContext.SystemContextAArch64->V11[1], SystemContext.SystemContextAArch64->V11[0]));
+-  DEBUG ((DEBUG_ERROR, " V12 0x%016lx %016lx  V13 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V12[1], SystemContext.SystemContextAArch64->V12[0], SystemContext.SystemContextAArch64->V13[1], SystemContext.SystemContextAArch64->V13[0]));
+-  DEBUG ((DEBUG_ERROR, " V14 0x%016lx %016lx  V15 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V14[1], SystemContext.SystemContextAArch64->V14[0], SystemContext.SystemContextAArch64->V15[1], SystemContext.SystemContextAArch64->V15[0]));
+-  DEBUG ((DEBUG_ERROR, " V16 0x%016lx %016lx  V17 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V16[1], SystemContext.SystemContextAArch64->V16[0], SystemContext.SystemContextAArch64->V17[1], SystemContext.SystemContextAArch64->V17[0]));
+-  DEBUG ((DEBUG_ERROR, " V18 0x%016lx %016lx  V19 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V18[1], SystemContext.SystemContextAArch64->V18[0], SystemContext.SystemContextAArch64->V19[1], SystemContext.SystemContextAArch64->V19[0]));
+-  DEBUG ((DEBUG_ERROR, " V20 0x%016lx %016lx  V21 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V20[1], SystemContext.SystemContextAArch64->V20[0], SystemContext.SystemContextAArch64->V21[1], SystemContext.SystemContextAArch64->V21[0]));
+-  DEBUG ((DEBUG_ERROR, " V22 0x%016lx %016lx  V23 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V22[1], SystemContext.SystemContextAArch64->V22[0], SystemContext.SystemContextAArch64->V23[1], SystemContext.SystemContextAArch64->V23[0]));
+-  DEBUG ((DEBUG_ERROR, " V24 0x%016lx %016lx  V25 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V24[1], SystemContext.SystemContextAArch64->V24[0], SystemContext.SystemContextAArch64->V25[1], SystemContext.SystemContextAArch64->V25[0]));
+-  DEBUG ((DEBUG_ERROR, " V26 0x%016lx %016lx  V27 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V26[1], SystemContext.SystemContextAArch64->V26[0], SystemContext.SystemContextAArch64->V27[1], SystemContext.SystemContextAArch64->V27[0]));
+-  DEBUG ((DEBUG_ERROR, " V28 0x%016lx %016lx  V29 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V28[1], SystemContext.SystemContextAArch64->V28[0], SystemContext.SystemContextAArch64->V29[1], SystemContext.SystemContextAArch64->V29[0]));
+-  DEBUG ((DEBUG_ERROR, " V30 0x%016lx %016lx  V31 0x%016lx %016lx\n", SystemContext.SystemContextAArch64->V30[1], SystemContext.SystemContextAArch64->V30[0], SystemContext.SystemContextAArch64->V31[1], SystemContext.SystemContextAArch64->V31[0]));
+-
+-  DEBUG ((DEBUG_ERROR, "\n  SP 0x%016lx  ELR 0x%016lx  SPSR 0x%08lx  FPSR 0x%08lx\n ESR 0x%08lx          FAR 0x%016lx\n", SystemContext.SystemContextAArch64->SP, SystemContext.SystemContextAArch64->ELR, SystemContext.SystemContextAArch64->SPSR, SystemContext.SystemContextAArch64->FPSR, SystemContext.SystemContextAArch64->ESR, SystemContext.SystemContextAArch64->FAR));
+-
+-  DEBUG ((DEBUG_ERROR, "\n ESR : EC 0x%02x  IL 0x%x  ISS 0x%08x\n", (SystemContext.SystemContextAArch64->ESR & 0xFC000000) >> 26, (SystemContext.SystemContextAArch64->ESR >> 25) & 0x1, SystemContext.SystemContextAArch64->ESR & 0x1FFFFFF));
+-
+-  DescribeExceptionSyndrome (SystemContext.SystemContextAArch64->ESR);
+-
+-  DEBUG ((DEBUG_ERROR, "\nStack dump:\n"));
+-  for (Offset = -256; Offset < 256; Offset += 32) {
+-    DEBUG ((
+-      DEBUG_ERROR,
+-      "%c %013lx: %016lx %016lx %016lx %016lx\n",
+-      Offset == 0 ? '>' : ' ',
+-      SystemContext.SystemContextAArch64->SP + Offset,
+-      *(UINT64 *)(SystemContext.SystemContextAArch64->SP + Offset),
+-      *(UINT64 *)(SystemContext.SystemContextAArch64->SP + Offset + 8),
+-      *(UINT64 *)(SystemContext.SystemContextAArch64->SP + Offset + 16),
+-      *(UINT64 *)(SystemContext.SystemContextAArch64->SP + Offset + 24)
+-      ));
+-  }
+-
+-  // Attempt to print that we had a synchronous exception to ConOut.  We do
+-  // this after the serial logging as ConOut's logging is more complex and we
+-  // aren't guaranteed to succeed.
+-  LogToConsole (UnicodeBuffer);
+-
+-  ASSERT (FALSE);
++  SerialWriteAscii ("\fEXC ");
++  SerialWriteAscii (mExceptionTypeString[ExceptionType]);
++  SerialWriteAscii (" PC ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->ELR);
++  SerialWriteAscii (" LR ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->LR);
++  SerialWriteAscii (" X0 ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->X0);
++  SerialWriteAscii (" X1 ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->X1);
++  SerialWriteAscii (" X2 ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->X2);
++  SerialWriteAscii ("\nESR ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->ESR);
++  SerialWriteAscii (" FAR ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->FAR);
++  SerialWriteAscii (" SP ");
++  SerialWriteHex32 ((UINT32)SystemContext.SystemContextAArch64->SP);
++  SerialWriteAscii ("\n");
+   CpuDeadLoop ();
+ }
+ 
+diff --git a/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/ExceptionSupport.S b/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/ExceptionSupport.S
+index 81b5225..057b730 100644
+--- a/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/ExceptionSupport.S
++++ b/UefiCpuPkg/Library/CpuExceptionHandlerLib/AArch64/ExceptionSupport.S
+@@ -188,15 +188,15 @@ ASM_PFX(SynchronousExceptionSPx):                                         \
+                                                                           \
+ VECTOR_ENTRY(ExceptionHandlersStart, ARM_VECTOR_CUR_SPX_IRQ)              \
+ ASM_PFX(IrqSPx):                                                          \
+-  ExceptionEntry  EXCEPT_AARCH64_IRQ                                     ;\
++  ExceptionEntry  EXCEPT_AARCH64_IRQ, SP0                                ;\
+                                                                           \
+ VECTOR_ENTRY(ExceptionHandlersStart, ARM_VECTOR_CUR_SPX_FIQ)              \
+ ASM_PFX(FiqSPx):                                                          \
+-  ExceptionEntry  EXCEPT_AARCH64_FIQ                                     ;\
++  ExceptionEntry  EXCEPT_AARCH64_FIQ, SP0                                ;\
+                                                                           \
+ VECTOR_ENTRY(ExceptionHandlersStart, ARM_VECTOR_CUR_SPX_SERR)             \
+ ASM_PFX(SErrorSPx):                                                       \
+-  ExceptionEntry  EXCEPT_AARCH64_SERROR                                  ;\
++  ExceptionEntry  EXCEPT_AARCH64_SERROR, SP0                             ;\
+                                                                           \
+ /* Lower EL using AArch64 : 0x400 - 0x580 */                              \
+ VECTOR_ENTRY(ExceptionHandlersStart, ARM_VECTOR_LOW_A64_SYNC)             \

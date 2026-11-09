@@ -1,0 +1,11 @@
+# Keep CRLF in files that come from upstream EDK2/Mu, so patches and overlays
+# keep matching byte-for-byte after a fresh clone.
+*.c            text=auto
+*.h            text=auto
+*.S            text=auto
+*.py           text eol=lf
+*.sh           text eol=lf
+*.md           text eol=lf
+*.lock         text eol=lf
+*.patch        -text
+*.dtb          binary

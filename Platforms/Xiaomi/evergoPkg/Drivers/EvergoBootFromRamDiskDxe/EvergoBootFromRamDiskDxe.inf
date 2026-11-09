@@ -1,0 +1,35 @@
+## @file
+#  evergo: start \EFI\BOOT\BOOTAA64.EFI from the boot.img RAM-disk FAT volume.
+##
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = EvergoBootFromRamDiskDxe
+  FILE_GUID                      = 7C2F1A44-9E3B-4D11-8A6F-2B5D4C0E9A71
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = EvergoBootFromRamDiskEntry
+
+[Sources]
+  EvergoBootFromRamDiskDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiLoadedImageProtocolGuid
+
+[Guids]
+  gEfiFileInfoGuid
+
+[Depex]
+  TRUE
