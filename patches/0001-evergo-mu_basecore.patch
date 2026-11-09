@@ -1,3 +1,23 @@
+# target: Mu_Basecore
+#
+# evergo changes to Microsoft Mu (mu_basecore).
+#
+# Apply from inside the Mu_Basecore submodule of the UEFI tree:
+#     git -C <tree>/Mu_Basecore apply --ignore-whitespace <this file>
+#
+# Upstream files use CRLF, hence --ignore-whitespace.
+#
+# Adds MdeModulePkg/Include/Library/EvergoTrace.h (the TRC1 trace-ring writer)
+# and modifies:
+#   ArmPkg        GICv3 redistributor wake-up after a hot jump, spurious
+#                 interrupt handling, generic timer fixes for entering UEFI
+#                 from a running Linux kernel.
+#   MdeModulePkg  DXE/BDS progress beacons, image loading.
+#   UefiCpuPkg    AArch64 exception handler rework (no host debugger needed).
+#   SecurityPkg   authenticated variable handling.
+#   EmbeddedPkg   PrePi HOB handling.
+#   MdePkg        AArch64 asm macros.
+#
 diff --git a/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c b/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c
 index 5fd28e3..2e788d4 100644
 --- a/ArmPkg/Drivers/ArmGicDxe/GicV3/ArmGicV3Dxe.c
@@ -649,6 +669,343 @@ index eb2ce42..449cbae 100644
    Status = CoreReinstallProtocolInterface (
               Image->Handle,
               &gEfiLoadedImageProtocolGuid,
+diff --git a/MdeModulePkg/Include/Library/EvergoTrace.h b/MdeModulePkg/Include/Library/EvergoTrace.h
+new file mode 100644
+index 0000000..ec36718
+--- /dev/null
++++ b/MdeModulePkg/Include/Library/EvergoTrace.h
+@@ -0,0 +1,331 @@
++/** @file
++  Evergo TRC1 trace ring: one 64 KiB record area in the reserved FD slot.
++
++  Design rules (see evergo_jump/TRACE-DESIGN.md):
++    * every stage writes its own record - nothing overwrites another stage;
++    * each record is cache-cleaned by its own address, so a watchdog reset
++      cannot lose it (the old single-slot beacons could);
++    * no print, no serial, no GOP, no allocation: plain stores plus DC CVAC;
++    * safe before the MMU is on (VA == PA there) and after.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++#ifndef EVERGO_TRACE_H_
++#define EVERGO_TRACE_H_
++
++// Triple-copy record area (AUDIT-2026-11-06-framebuffer.md §3.1):
++//   A 0x4811F800 - pstore tail 2 KiB, proven writable, may be overwritten by
++//     pstore init after Android boots;
++//   B (removed 2026-11-06): 0xB6430000 was INSIDE the "XNUP Payload" map entry
++//     [0xB5400000,0xB6C00000), so ValidateMemoryMap() saw an overlap and
++//     CpuDeadLoop()'d inside InitializeMemory - the FD never reached DXE.
++//     Copy A (pstore tail) and copy C (FB handoff page) are kept.
++//   C 0xA4000800 - FB handoff page, immediately AFTER the DTB pointer slot at
++//     0xA40007F8, so the handoff magic and the published DTB stay untouched.
++// All three receive the SAME records; the reader picks whichever survives.
++#define TRC_BASE        0x48121000ULL   /* copy A: moved 2026-11-09, collided with SEC beacon page */
++#define TRC_SIZE        0x800ULL
++//
++// copy C moved 2026-11-07: 0xA4000800 (inside the "FB Handoff" AddDev MmIO page)
++// read back as 0xFF from the module, i.e. it is not a usable DRAM window on this
++// device, so the second copy never survived. 0xB0300000 is the "Evergo Trace"
++// entry in MemoryMapLib (1 MiB reservation inside the FD no-map slot) and is
++// writable from both sides - the module already dumps it successfully.
++//
++#define TRC_BASE_C      0xB0300000ULL   /* copy C: dedicated trace reservation */
++#define TRC_SIZE_C      0x800ULL
++#define TRC_MAGIC       0x31435254ULL   /* 'TRC1' */
++#define TRC_VERSION     1ULL
++#define TRC_HDR_BYTES   0x80ULL
++#define TRC_REC_BYTES   0x80ULL
++#define TRC_MAX_RECS    ((TRC_SIZE - TRC_HDR_BYTES) / TRC_REC_BYTES)   /* 15 */
++
++// phases
++#define TRC_ENTER       1ULL
++#define TRC_EXIT        2ULL
++#define TRC_ERROR       3ULL
++#define TRC_EXCEPTION   4ULL
++
++// stages: 0x01xx SEC, 0x02xx DXE, 0x03xx BDS, 0x04xx loader, 0x06xx exception
++#define TRC_SEC_ENTRY       0x0101ULL
++#define TRC_SEC_MEMORY      0x0105ULL
++#define TRC_SEC_DTB         0x0106ULL
++#define TRC_SEC_DXE_JUMP    0x0107ULL
++#define TRC_DXE_STEP        0x0200ULL   /* + step value from the old beacon */
++#define TRC_BDS_STEP        0x0300ULL   /* + step value from the old beacon */
++#define TRC_BDS_HOOK        0x0303ULL
++#define TRC_LOADER_MAIN     0x0304ULL
++#define TRC_LOADER_PIN      0x0305ULL
++#define TRC_LOADER_FREE     0x0306ULL
++#define TRC_LOADER_LOADIMG  0x0307ULL
++#define TRC_LOADER_STARTIMG 0x0308ULL
++#define TRC_EXCEPTION_SEC   0x0601ULL
++#define TRC_EXCEPTION_APP   0x0602ULL
++
++typedef struct {
++  UINT64  Seq;
++  UINT64  Stage;
++  UINT64  Phase;
++  UINT64  Status;
++  UINT64  Arg0;
++  UINT64  Arg1;
++  UINT64  Arg2;
++  UINT64  Arg3;
++  UINT64  Pc;
++  UINT64  Sp;
++  UINT64  Esr;
++  UINT64  Far;
++  UINT64  Extra0;
++  UINT64  Extra1;
++  UINT64  Tsc;
++  UINT64  Crc;
++} EVERGO_TRC_REC;
++
++STATIC
++inline
++UINT64
++TrcNow (
++  VOID
++  )
++{
++  UINT64  V;
++
++  asm volatile ("mrs %0, cntpct_el0" : "=r" (V));
++  return V;
++}
++
++STATIC
++inline
++UINT64
++TrcPc (
++  VOID
++  )
++{
++  UINT64  V;
++
++  asm volatile ("adr %0, ." : "=r" (V));
++  return V;
++}
++
++STATIC
++inline
++UINT64
++TrcSp (
++  VOID
++  )
++{
++  UINT64  V;
++
++  asm volatile ("mov %0, sp" : "=r" (V));
++  return V;
++}
++
++//
++// Fletcher-style fold over the first 15 words; 0 means "never written".
++//
++STATIC
++inline
++UINT64
++TrcCrc (
++  IN CONST UINT64  *W
++  )
++{
++  UINT64  A = 0;
++  UINT64  B = 0;
++
++  for (UINTN I = 0; I < 15; I++) {
++    A = (A + W[I]) & 0xFFFFFFFFULL;
++    B = (B + A) & 0xFFFFFFFFULL;
++  }
++
++  return (B << 32) | A;
++}
++
++STATIC
++inline
++VOID
++TrcClean (
++  IN UINT64  Address,
++  IN UINT64  Length
++  )
++{
++  for (UINT64 Line = 0; Line < Length; Line += 64) {
++    asm volatile ("dc cvac, %0" :: "r" (Address + Line) : "memory");
++  }
++
++  asm volatile ("dsb sy" ::: "memory");
++}
++
++STATIC
++inline
++VOID
++TrcWriteCopy (
++  IN UINT64                 Base,
++  IN UINT64                 Stage,
++  IN UINT64                 Phase,
++  IN UINT64                 Status,
++  IN UINT64                 Arg0,
++  IN UINT64                 Arg1,
++  IN UINT64                 Arg2,
++  IN UINT64                 Arg3
++  )
++{
++  volatile UINT64          *Header = (volatile UINT64 *)(UINTN)Base;
++  volatile EVERGO_TRC_REC  *Rec;
++  UINT64                    Count;
++
++  if (Header[0] != TRC_MAGIC) {
++    Header[0] = TRC_MAGIC;
++    Header[1] = TRC_VERSION;
++    Header[2] = 0;                                  /* next index */
++    Header[3] = 0;                                  /* count */
++    Header[4] = 0;                                  /* stage mask */
++    Header[5] = 0;                                  /* last stage */
++    Header[6] = 0;                                  /* last status */
++    Header[7] = 0;                                  /* flags */
++    asm volatile ("dsb sy" ::: "memory");
++    TrcClean (Base, TRC_HDR_BYTES);
++  }
++
++  Count = Header[3];
++  Rec   = (volatile EVERGO_TRC_REC *)(UINTN)(Base + TRC_HDR_BYTES +
++                                             (Count % TRC_MAX_RECS) * TRC_REC_BYTES);
++
++  Rec->Seq    = Count;
++  Rec->Stage  = Stage;
++  Rec->Phase  = Phase;
++  Rec->Status = Status;
++  Rec->Arg0   = Arg0;
++  Rec->Arg1   = Arg1;
++  Rec->Arg2   = Arg2;
++  Rec->Arg3   = Arg3;
++  Rec->Pc     = TrcPc ();
++  Rec->Sp     = TrcSp ();
++  Rec->Esr    = 0;
++  Rec->Far    = 0;
++  Rec->Extra0 = 0;
++  Rec->Extra1 = 0;
++  Rec->Tsc    = TrcNow ();
++  Rec->Crc     = 0;
++  Rec->Crc     = TrcCrc ((CONST UINT64 *)Rec);
++  asm volatile ("dsb sy" ::: "memory");
++  TrcClean ((UINT64)(UINTN)Rec, TRC_REC_BYTES);
++
++  Header[3] = Count + 1;
++  Header[4] |= (1ULL << (Stage & 0x3F));
++  Header[5] = Stage;
++  Header[6] = Status;
++  if ((Count + 1) > TRC_MAX_RECS) {
++    Header[7] |= 2;                                 /* wrapped */
++  }
++
++  asm volatile ("dsb sy" ::: "memory");
++  TrcClean (Base, TRC_HDR_BYTES);
++}
++
++/**
++  Append one record to all three copies. Never fails, never allocates,
++  never prints. A copy that is unmapped or read-only cannot be detected
++  here - the exception vector records the fault and the reader compares
++  which copies actually received the record.
++**/
++STATIC
++inline
++VOID
++TrcRecord (
++  IN UINT64  Stage,
++  IN UINT64  Phase,
++  IN UINT64  Status,
++  IN UINT64  Arg0,
++  IN UINT64  Arg1,
++  IN UINT64  Arg2,
++  IN UINT64  Arg3
++  )
++{
++  TrcWriteCopy (TRC_BASE, Stage, Phase, Status, Arg0, Arg1, Arg2, Arg3);
++  TrcWriteCopy (TRC_BASE_C, Stage, Phase, Status, Arg0, Arg1, Arg2, Arg3);
++  //
++  // Pet the TOPRGU watchdog on every trace point.
++  //
++  // SEC arms it for 31 s as the safety net, but a normal boot already spends
++  // ~28 s in DXE/console/LoadImage before the loader even starts, so the
++  // loader was being killed a few seconds into copying the kernel - landing on
++  // a different segment each run (bisected 2026-11-07). Tracing is the one
++  // thing that happens regularly on every path, so it is the natural place to
++  // reload the counter; the net stays armed, just no longer pre-expired.
++  //
++  *(volatile UINT32 *)(UINTN)(0x10007000ULL + 8) = 0x1971;
++}
++
++/**
++  Exception record with the full architectural state, written to copy A only:
++  the exception may have been caused by an unmapped B or C, so touching them
++  here would recurse into the same fault.
++**/
++STATIC
++inline
++VOID
++TrcException (
++  IN UINT64  Stage,
++  IN UINT64  Esr,
++  IN UINT64  Far,
++  IN UINT64  Elr,
++  IN UINT64  Sp
++  )
++{
++  volatile UINT64         *Header = (volatile UINT64 *)(UINTN)TRC_BASE;
++  volatile EVERGO_TRC_REC *Rec;
++  UINT64                   Count;
++  UINT64                   Sctlr;
++  UINT64                   Ttbr0;
++  UINT64                   El;
++
++  asm volatile ("mrs %0, sctlr_el1" : "=r" (Sctlr));
++  asm volatile ("mrs %0, ttbr0_el1" : "=r" (Ttbr0));
++  asm volatile ("mrs %0, CurrentEL" : "=r" (El));
++
++  if (Header[0] != TRC_MAGIC) {
++    Header[0] = TRC_MAGIC;
++    Header[1] = TRC_VERSION;
++    Header[2] = 0;
++    Header[3] = 0;
++    Header[4] = 0;
++    Header[5] = 0;
++    Header[6] = 0;
++    Header[7] = 1;                                  /* exception seen */
++  }
++
++  Count = Header[3];
++  Rec   = (volatile EVERGO_TRC_REC *)(UINTN)(TRC_BASE + TRC_HDR_BYTES +
++                                             (Count % TRC_MAX_RECS) * TRC_REC_BYTES);
++  Rec->Seq    = Count;
++  Rec->Stage  = Stage;
++  Rec->Phase  = TRC_EXCEPTION;
++  Rec->Status = 0;
++  Rec->Arg0   = Elr;
++  Rec->Arg1   = Far;
++  Rec->Arg2   = 0;
++  Rec->Arg3   = 0;
++  Rec->Pc     = Elr;
++  Rec->Sp     = Sp;
++  Rec->Esr    = Esr;
++  Rec->Far    = Far;
++  Rec->Extra0 = Sctlr;
++  Rec->Extra1 = (El << 2);
++  Rec->Tsc    = TrcNow ();
++  Rec->Crc    = 0;
++  Rec->Crc    = TrcCrc ((CONST UINT64 *)Rec);
++  asm volatile ("dsb sy" ::: "memory");
++  TrcClean ((UINT64)(UINTN)Rec, TRC_REC_BYTES);
++
++  Header[3] = Count + 1;
++  Header[5] = Stage;
++  Header[7] |= 1;
++  asm volatile ("dsb sy" ::: "memory");
++  TrcClean (TRC_BASE, TRC_HDR_BYTES);
++}
++
++#define TRC(Stage, Phase, Status, A0, A1, A2, A3) \
++  TrcRecord ((Stage), (Phase), (Status), (UINT64)(A0), (UINT64)(A1), (UINT64)(A2), (UINT64)(A3))
++
++#endif /* EVERGO_TRACE_H_ */
 diff --git a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
 index d3c1dff..5012179 100644
 --- a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c

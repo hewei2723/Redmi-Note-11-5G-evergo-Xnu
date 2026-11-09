@@ -79,18 +79,41 @@ export EDK_TOOLS_PATH="$TREE/Mu_Basecore/BaseTools"
 export CONF_PATH="$TREE/Conf"
 export PACKAGES_PATH="$TREE/Platforms/Xiaomi:$TREE/UniXNUPkg:$TREE/Common/Mu:$TREE/Common/Mu_OEM_Sample:$TREE/Mu_Basecore:$TREE/Silicon/MediaTek:$TREE/Silicon/Silicium:$TREE/Silicium-ACPI:$TREE/Silicium-ACPI/Platforms/Xiaomi:$TREE/Silicium-ACPI/Silicon/MediaTek"
 export CLANG_BIN="$CLANG_DIR/" CLANG_HOST_BIN="/usr/bin/"
+# EDK2's BaseTools wrappers shell out to a `python` command that many systems
+# do not provide. Point them at the interpreter running this script instead.
+PYTHON_CMD=$(command -v python3 || command -v python || true)
+[ -n "$PYTHON_CMD" ] || die "python3 is required"
+export PYTHON_COMMAND="$PYTHON_CMD"
 export PATH="$TREE/.bin:$TREE/Mu_Basecore/BaseTools/BinWrappers/PosixLike:$CLANG_DIR:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "$TREE/.bin" "$TREE/Conf"
-if [ ! -x "$TREE/.bin/build" ]; then
-  say "generating EDK2 base tools"
-  python3 "$EDK_TOOLS_PATH/Source/C/bin" 2>/dev/null || true
-  ( cd "$TREE/Mu_Basecore" && make -C BaseTools -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" )
+if [ ! -x "$TREE/Mu_Basecore/BaseTools/BinWrappers/PosixLike/build" ]; then
+  die "$TREE/Mu_Basecore/BaseTools is incomplete; re-run scripts/fetch-deps.sh"
+fi
+if [ ! -x "$TREE/Mu_Basecore/BaseTools/Source/C/bin/GenFw" ]; then
+  say "building EDK2 base tools (first run only)"
+  ( cd "$TREE/Mu_Basecore" && make -C BaseTools -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" ) \
+    || die "EDK2 base tools failed to build"
 fi
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
+# EDK2 reads Conf/{target,tools_def,build_rule}.txt. They are generated from
+# the BaseTools templates on first use; without them build.py stops with
+# "File/directory not found in workspace: Conf/tools_def.txt".
+if [ ! -f "$TREE/Conf/tools_def.txt" ]; then
+  say "creating EDK2 Conf/ from BaseTools templates"
+  for f in target tools_def build_rule; do
+    tpl="$TREE/Mu_Basecore/BaseTools/Conf/$f.template"
+    if [ -f "$tpl" ]; then
+      cp "$tpl" "$TREE/Conf/$f.txt"
+    else
+      die "missing template: $tpl"
+    fi
+  done
+fi
+
 say "building evergoPkg ($TARGET, CLANGPDB, AARCH64)"
 ( cd "$TREE" && build \
     -a AARCH64 -t CLANGPDB -b "$TARGET" \

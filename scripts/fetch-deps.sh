@@ -95,18 +95,32 @@ done
 # ---------------------------------------------------------------------------
 # 3. Apply the evergo patches to the upstream tree
 # ---------------------------------------------------------------------------
+# Each patch states where it applies in its header line, because upstream
+# paths differ per component:
+#   "target: Mu_Basecore"  -> apply inside the mu_basecore submodule
+#   "target: ."            -> apply at the tree root
+apply_patch() {  # apply_patch <file>
+  local patch=$1 name dir target
+  name=$(basename "$patch")
+  target=$(sed -n 's/^# target: *//p' "$patch" | head -1)
+  target=${target:-.}
+  dir="$BASE/$target"
+  [ -d "$dir" ] || die "$name targets '$target', which is not in the tree"
+
+  if git -C "$dir" apply --check --ignore-whitespace "$patch" 2>/dev/null; then
+    git -C "$dir" apply --ignore-whitespace "$patch"
+    echo "  applied $name ($target)"
+  elif git -C "$dir" apply --check --reverse --ignore-whitespace "$patch" 2>/dev/null; then
+    echo "  already applied $name ($target)"
+  else
+    die "$name does not apply to $dir - the pinned revision is not what the patch was written against"
+  fi
+}
+
 say "applying evergo patches"
 for p in "$ROOT"/patches/*.patch; do
   [ -e "$p" ] || continue
-  name=$(basename "$p")
-  if git -C "$BASE" apply --check --ignore-whitespace "$p" 2>/dev/null; then
-    git -C "$BASE" apply --ignore-whitespace "$p"
-    echo "  applied $name"
-  elif git -C "$BASE" apply --check --reverse --ignore-whitespace "$p" 2>/dev/null; then
-    echo "  already applied $name"
-  else
-    die "$name does not apply to $BASE - the upstream revision moved"
-  fi
+  apply_patch "$p"
 done
 
 # ---------------------------------------------------------------------------
