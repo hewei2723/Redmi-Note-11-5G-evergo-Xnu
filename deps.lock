@@ -14,10 +14,14 @@
 # UEFI framework
 # ---------------------------------------------------------------------------
 
-# Project Silicium: the MT6833 UEFI firmware this port is derived from.
-# Provides Silicon/Silicium/SiliciumPkg (SEC, BDS glue, SimpleFbDxe,
-# KeypadDxe, BootManagerLib) and the evergoPkg parent layout.
-uefi-base        https://github.com/Project-Silicium/Mu-Silicium.git          8221489a628aa47daa0776322ee17ce8dc7a9981
+# UEFI base tree: Project Silicium's Mu-Silicium firmware, carried in the
+# camellia (MT6833) fork this port was built on. Provides
+# Silicon/Silicium/SiliciumPkg (SEC, BDS glue, SimpleFbDxe, KeypadDxe,
+# BootManagerLib), Silicon/MediaTek and the Platforms/ layout.
+#
+# This is the commit the verified build was made from. It is not an upstream
+# Project-Silicium release; see CREDITS.md for the relationship.
+uefi-base        https://github.com/stanveyjiang/uefi-camellia.git            46752be6cd13a327687ba0d73536c84b341a5d3d
 
 # Microsoft Mu (mu_basecore): the EDK2 fork the UEFI core is built from.
 # Pinned because patches/0001-evergo-mu_basecore.patch is written against it.

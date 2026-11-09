@@ -53,7 +53,11 @@ if [ ! -d "$BASE/.git" ]; then
 fi
 git -C "$BASE" fetch --quiet origin "$BASE_REV" || die "cannot fetch $BASE_REV"
 git -C "$BASE" checkout --quiet "$BASE_REV"
-git -C "$BASE" submodule update --init --recursive --depth 1 --jobs "$JOBS"
+
+# The base tree carries submodules (Mu core, MediaTek blobs, ACPI, OpenSSL).
+# Shallow-init them here; the exact revisions are re-pinned in step 2.
+git -C "$BASE" submodule update --init --recursive --depth 1 --jobs "$JOBS" \
+  || say "some submodules could not be fetched shallowly; they are re-pinned in step 2"
 say "UEFI base at $(git -C "$BASE" rev-parse --short HEAD)"
 
 # ---------------------------------------------------------------------------
