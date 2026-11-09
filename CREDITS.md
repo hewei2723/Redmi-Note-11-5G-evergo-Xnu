@@ -35,6 +35,22 @@ and their licences and authorship apply to the parts they contributed.
   manager finds, loads and starts `UniXNU.efi` from the firmware volume
   (`BootManagerLib/BootManager.c`), and which modules the FV contains.
 
+### hackios-pencilpen1 — XNU loader and payload container design
+
+* **Used by:** `Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c`
+  and `XnuLoader.h`, and the `XNUP` container format those files describe.
+* **What we use:** the design of the stage-0 XNU loader: an `XNUP` container
+  holding `loader.efi`, the layout of that container, and the beacon-based
+  diagnostics. The code was ported and then changed for evergo: this device has
+  no boot shim on the hot-jump path, so the container is expected in the
+  existing no-map DTB reservation at `0xB5400000` instead of at the address the
+  original used, and a missing `loader.efi` returns to BDS instead of
+  cold-resetting.
+* **Provenance:** the source comments in both files name the origin explicitly
+  so the ported parts stay distinguishable from evergo-specific work.
+* **Licence:** BSD-2-Clause-Patent, consistent with the rest of the UEFI tree.
+  If you redistribute this repository, keep the provenance comments intact.
+
 ### Microsoft Mu (mu_basecore, mu_plus, mu_oem_sample)
 
 * **Repositories:** https://github.com/microsoft/mu_basecore,
