@@ -43,7 +43,7 @@ say "work tree: $WORKDIR"
 # ---------------------------------------------------------------------------
 # 1. UEFI base tree
 # ---------------------------------------------------------------------------
-BASE="$WORKDIR/uefi-base"
+BASE="$WORKDIR"
 BASE_REV=$(lock_value uefi-base 3)
 BASE_URL=$(lock_value uefi-base 2)
 

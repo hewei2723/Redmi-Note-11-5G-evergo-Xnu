@@ -51,11 +51,19 @@ say() { printf '\n==> %s\n' "$*"; }
 # Toolchain
 # ---------------------------------------------------------------------------
 if [ -z "$NDK" ]; then
+  # Standard install locations, newest last so the loop ends on the highest.
   for candidate in \
     "$HOME/Library/Android/sdk/ndk"/* \
     "$HOME/Android/Sdk/ndk"/* \
-    /opt/android-ndk* ; do
-    [ -d "$candidate/toolchains/llvm/prebuilt" ] && NDK=$candidate
+    "$HOME/Android/android-sdk/ndk"/* \
+    /usr/local/lib/android/sdk/ndk/* \
+    /opt/android-sdk/ndk/* \
+    /opt/android-ndk* \
+    "$HOME"/android-ndk* \
+    "$HOME"/Android/android-ndk* ; do
+    if [ -d "$candidate/toolchains/llvm/prebuilt" ]; then
+      NDK=$candidate
+    fi
   done
 fi
 if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
