@@ -40,13 +40,38 @@ say() { printf '\n==> %s\n' "$*"; }
 
 [ -n "$TREE" ] || die "--tree is required"
 [ -d "$TREE/BootShim" ] || die "no BootShim directory in $TREE"
+# Absolute, because make is invoked from inside the tree and relative paths
+# stop resolving once the working directory changes.
+TREE=$(cd "$TREE" && pwd)
 
 if [ -z "$NDK" ]; then
-  for candidate in "$HOME/Library/Android/sdk/ndk"/* "$HOME/Android/Sdk/ndk"/* /opt/android-ndk*; do
-    [ -d "$candidate/toolchains/llvm/prebuilt" ] && NDK=$candidate
+  for candidate in \
+    "$HOME/Library/Android/sdk/ndk"/* \
+    "$HOME/Android/Sdk/ndk"/* \
+    "$HOME/Android/android-sdk/ndk"/* \
+    /usr/local/lib/android/sdk/ndk/* \
+    /opt/android-sdk/ndk/* \
+    /opt/android-ndk* \
+    "$HOME"/android-ndk* \
+    "$HOME"/Android/android-ndk* ; do
+    if [ -d "$candidate/toolchains/llvm/prebuilt" ]; then
+      NDK=$candidate
+    fi
   done
 fi
-[ -n "$NDK" ] && [ -d "$NDK" ] || die "Android NDK not found; pass --ndk"
+if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+  cat >&2 <<'MSG'
+build-shim: Android NDK not found.
+
+BootShim is assembled with the NDK's clang. Install it (r26 or newer; verified
+with r30) and pass --ndk DIR, or set ANDROID_NDK_ROOT.
+
+  macOS    brew install --cask android-ndk
+  Linux    unzip android-ndk-r30-linux.zip    (from dl.google.com/android/repository)
+  WSL2     as Linux; keep it under ~ rather than /mnt/c
+MSG
+  exit 1
+fi
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-*) HOST=darwin-x86_64 ;;

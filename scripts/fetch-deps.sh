@@ -89,15 +89,25 @@ pin_submodule() {  # pin_submodule <path> <revision> <url>
   echo "  $path @ $(git -C "$abs" rev-parse --short HEAD)"
 }
 
-# Mu_Basecore has nested submodules of its own (e.g. MdePkg's mipisyst) that
-# its .dec files reference. Without them build.py stops with "is not found in
-# packages path". These are not version-critical: initialise whatever the
-# pinned commit records.
-if [ -f "$BASE/Mu_Basecore/.gitmodules" ]; then
-  say "initialising nested submodules of Mu_Basecore"
-  git -C "$BASE/Mu_Basecore" submodule update --init --recursive --depth 1 --jobs "$JOBS" \
-    || say "note: some nested submodules could not be fetched"
-fi
+# Mu_Basecore has nested submodules. Only a few are referenced by .dec files
+# the platform's include chain actually pulls in, and a recursive update drags
+# in OpenSSL's own test suites (krb5, wycheproof, tlsfuzzer, ...) which is
+# gigabytes of unrelated data. Initialise just what the build reads.
+#
+# MdePkg/MdePkg.dec lists Library/MipiSysTLib/mipisyst/library/include in its
+# [Includes], so build.py fails without it.
+MU_NESTED_REQUIRED="MdePkg/Library/MipiSysTLib/mipisyst"
+
+for sub in $MU_NESTED_REQUIRED; do
+  abs="$BASE/Mu_Basecore/$sub"
+  if [ -e "$abs/.git" ] || [ -n "$(ls -A "$abs" 2>/dev/null)" ]; then
+    echo "  $sub present"
+    continue
+  fi
+  say "initialising Mu_Basecore/$sub"
+  git -C "$BASE/Mu_Basecore" submodule update --init --depth 1 -- "$sub" \
+    || die "cannot initialise Mu_Basecore/$sub"
+done
 
 # ---------------------------------------------------------------------------
 # 3. Apply the evergo patches to the upstream tree

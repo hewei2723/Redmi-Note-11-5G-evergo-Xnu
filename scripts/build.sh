@@ -45,6 +45,9 @@ say() { printf '\n==> %s\n' "$*"; }
 
 [ -n "$TREE" ] || die "--tree is required (run scripts/fetch-deps.sh first)"
 [ -d "$TREE" ] || die "no such tree: $TREE"
+# Absolute from here on: PATH entries built from a relative path break as soon
+# as a subshell changes directory (EDK2's `build` wrapper is found via PATH).
+TREE=$(cd "$TREE" && pwd)
 [ -f "$TREE/Platforms/Xiaomi/evergoPkg/evergo.dsc" ] || die "$TREE is not a prepared evergo tree"
 
 # ---------------------------------------------------------------------------
