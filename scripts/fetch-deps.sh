@@ -89,24 +89,25 @@ pin_submodule() {  # pin_submodule <path> <revision> <url>
   echo "  $path @ $(git -C "$abs" rev-parse --short HEAD)"
 }
 
-# Mu_Basecore has nested submodules. Only a few are referenced by .dec files
-# the platform's include chain actually pulls in, and a recursive update drags
-# in OpenSSL's own test suites (krb5, wycheproof, tlsfuzzer, ...) which is
-# gigabytes of unrelated data. Initialise just what the build reads.
+# Mu_Basecore declares nine nested submodules. All nine are cheap (a few MB
+# each); what is expensive is recursing further, because one of them
+# (SecurityPkg/DeviceSecurity/SpdmLib/libspdm) vendors OpenSSL with its own
+# test suites - krb5, wycheproof, tlsfuzzer, python-ecdsa - which measured at
+# over 1.8 GB and was still cloning.
 #
-# MdePkg/MdePkg.dec lists Library/MipiSysTLib/mipisyst/library/include in its
-# [Includes], so build.py fails without it.
-MU_NESTED_REQUIRED="MdePkg/Library/MipiSysTLib/mipisyst"
+# So: initialise Mu_Basecore's own submodules, but never recursively.
+say "initialising Mu_Basecore submodules (not recursive)"
+if [ -f "$BASE/Mu_Basecore/.gitmodules" ]; then
+  git -C "$BASE/Mu_Basecore" submodule update --init --depth 1 --jobs "$JOBS" \
+    || echo "  note: some Mu_Basecore submodules could not be fetched"
+fi
 
-for sub in $MU_NESTED_REQUIRED; do
-  abs="$BASE/Mu_Basecore/$sub"
-  if [ -e "$abs/.git" ] || [ -n "$(ls -A "$abs" 2>/dev/null)" ]; then
-    echo "  $sub present"
-    continue
+# The .dec files reference some of those paths in [Includes]; build.py resolves
+# them eagerly, so report which are still empty before the build does.
+for sub in $(git -C "$BASE/Mu_Basecore" config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}'); do
+  if [ -z "$(ls -A "$BASE/Mu_Basecore/$sub" 2>/dev/null)" ]; then
+    echo "  warning: Mu_Basecore/$sub is empty; the build may stop on it"
   fi
-  say "initialising Mu_Basecore/$sub"
-  git -C "$BASE/Mu_Basecore" submodule update --init --depth 1 -- "$sub" \
-    || die "cannot initialise Mu_Basecore/$sub"
 done
 
 # ---------------------------------------------------------------------------
