@@ -321,12 +321,22 @@ EDK2 基础工具在首次使用时从拉取的 Mu 树构建，因此无需单�
 | Android NDK | §4 中的链接 | 构建 |
 | `build-essential`、`uuid-dev` | 你的发行版 | 构建 |
 | **`evergo_stage1.ko`** | **本仓库的 Releases 页面** | 仅部署 |
+| **Magisk 模块**（`evergo-jump-v1.0.zip`） | **本仓库的 Releases 页面**，或用 `scripts/build-magisk.sh` 构建 | 可选：从手机图标直接运行固件 |
 | 设备内核树（1.7 GB） | 小米公开 GitHub；链接见 `stage1/README.md` | 仅当你自行重建模块时 |
 | `adb`、`fastboot` | Android platform-tools | 仅部署 |
 
 因此，一台全新机器无需任何外部帮助即可构建固件，并可从 Releases 页面下载一个
 文件来完成部署。唯一需要拉取内核树的情况，是你的内核与预编译模块所针对的内核
 不同。
+
+### 直接在手机上运行（Magisk 模块）
+
+如果你不想每次都接电脑用 `adb`，有一个 Magisk 模块会在桌面放一个图标：
+点一下、确认，手机就交给固件。它内置了已验证的 FD 和内核模块，完全自足。
+
+见 [`magisk/evergo-jump/README.md`](magisk/evergo-jump/README.md)。它会拒绝在
+`ro.product.device` 不是 `evergo` 的设备上安装，且绝不写分区，所以失败后断电
+重启即可恢复。
 
 ### Windows：使用 WSL2
 

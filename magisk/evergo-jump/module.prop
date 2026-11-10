@@ -1,0 +1,6 @@
+id=evergo-jump
+name=Evergo UEFI Jump
+version=v1.0
+versionCode=1
+author=evergo-uefi-port
+description=Launch the evergo UEFI firmware from a home-screen icon. Copies the bundled FD into reserved DRAM and branches into it without touching any partition. Requires root (this is a Magisk module). A failed attempt is recovered by power-cycling.

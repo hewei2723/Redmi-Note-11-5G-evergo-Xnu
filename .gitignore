@@ -53,3 +53,10 @@ crash-*.txt
 Conf/target.txt
 Conf/build_rule.txt
 Conf/tools_def.txt
+
+# Magisk module build outputs (binaries go to Releases, not git)
+magisk/apk-src/build/
+magisk/evergo-jump/EvergoJump.apk
+magisk/evergo-jump/evergo_stage1.ko
+magisk/evergo-jump/fd/
+magisk/evergo-jump-v*.zip

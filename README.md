@@ -337,12 +337,24 @@ list of external things, and where each comes from:
 | Android NDK | link in §4 | build |
 | `build-essential`, `uuid-dev` | your distribution | build |
 | **`evergo_stage1.ko`** | **the repository's Releases page** | deploy only |
+| **Magisk module** (`evergo-jump-v1.0.zip`) | **the repository's Releases page**, or build with `scripts/build-magisk.sh` | optional: run the firmware from a phone icon |
 | the device kernel tree (1.7 GB) | Xiaomi's public GitHub; link in `stage1/README.md` | only if you rebuild the module |
 | `adb`, `fastboot` | Android platform-tools | deploy only |
 
 So a fresh machine can build the firmware with no outside help, and can deploy
 it by downloading one file from the Releases page. The only reason to fetch the
 kernel tree is if your kernel differs from the one the prebuilt module targets.
+
+### Running it from the phone itself (Magisk module)
+
+If you would rather not use a computer and `adb` every time, there is a Magisk
+module that puts an icon on the home screen: tap it, confirm, and the phone
+hands over to the firmware. It bundles the verified FD and the kernel module,
+so it is self-contained.
+
+See [`magisk/evergo-jump/README.md`](magisk/evergo-jump/README.md). It refuses
+to install on any device whose `ro.product.device` is not `evergo`, and it
+never writes a partition, so a failed attempt is recovered by power-cycling.
 
 ### Windows: use WSL2
 
