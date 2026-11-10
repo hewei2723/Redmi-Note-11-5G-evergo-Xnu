@@ -15,6 +15,8 @@
 #   1  setup problem (no root, missing files, bad FD)
 #   2  could not read kernel symbol addresses
 #   3  insmod failed
+#   4  framebuffer handoff geometry gate failed (not safe to jump; retry from
+#      the launcher with the screen on)
 
 # This script lives at <module>/system/bin/evergo-jump. Magisk mounts that as
 # /system/bin/evergo-jump, so $0 may be either path; resolve through the symlink
@@ -93,6 +95,38 @@ cp -f "$FD" /data/adb/evergo-hotjump.fd || {
   log "ERROR: cannot copy FD to /data/adb/evergo-hotjump.fd"
   exit 1
 }
+
+# --- framebuffer handoff gate ---------------------------------------------
+#
+# The panel only shows the firmware output cleanly when the handoff geometry
+# is exactly 1088x2400 / byte pitch 4352 / 2550 contiguous pages. A wrong
+# pitch folds the frame into vertically repeated bands (the AFBC/pitch
+# failure). Publish the handoff with the module's mode=11 and REFUSE to jump
+# unless the geometry is right; a failed gate costs nothing, a blind jump
+# costs a garbled run.
+
+log "publishing framebuffer handoff (mode=11)"
+rmmod evergo_stage1 2>/dev/null
+if ! insmod "$KO" mode=11; then
+  log "ERROR: mode=11 handoff publish failed (insmod error)"
+  exit 4
+fi
+GEO=$(dmesg | grep -a "mode=11" | tail -2)
+rmmod evergo_stage1 2>/dev/null
+log "$GEO"
+echo "$GEO" | grep -q "byte_pitch=4352" || {
+  log "ERROR: geometry gate FAILED (byte_pitch is not 4352)."
+  log "  The DPU layer state is not safe to jump from."
+  log "  Wake the screen, go back to the launcher, and try again."
+  exit 4
+}
+echo "$GEO" | grep -q "pages=2550" || {
+  log "ERROR: geometry gate FAILED (pages is not 2550)."
+  log "  The scanout buffer is not contiguous enough to hand over."
+  log "  Wake the screen, go back to the launcher, and try again."
+  exit 4
+}
+log "geometry OK (1088x2400, pitch 4352, 2550 pages)"
 
 # --- jump ------------------------------------------------------------------
 #

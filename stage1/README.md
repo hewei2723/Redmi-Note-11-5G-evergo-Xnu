@@ -32,6 +32,42 @@ of the boot chain a user could not otherwise reconstruct. The compiled `.ko` is
 314 KB and is *not* committed, because it must match the kernel you are running:
 same kernel version, same LTO/CFI configuration, same symbol addresses.
 
+## The struct module `init` offset pitfall (measured 2026-11-10)
+
+The kernel fills `mod->init` from a relocation in the module's
+`.gnu.linkonce.this_module` section. **The offset of the `init` field inside
+`struct module` depends on the kernel config**, and a module built against a
+tree whose config differs by one pointer-sized field writes the init pointer
+into the wrong field. The kernel then sees `mod->init == NULL` and **silently
+skips init**: the module loads "Live", parameters parse, `insmod` returns 0 —
+but init never runs, nothing is printed, and nothing jumps. `rmmod` still works
+(the `exit` offset happened to match), which makes this look like a mystery.
+
+Measured on the phone kernel (`4.14.186-perf-g75f5627fcaea`):
+
+| build | `init` relocation offset | result on the phone |
+| --- | --- | --- |
+| vendor `connfem.ko` (ground truth for this kernel) | `0x158` | works |
+| this repo's original release `.ko` (`bfd10375...`) | `0x150` | init silently skipped |
+| this repo's bundled `.ko` after the one-byte patch | `0x158` | works |
+
+The bundled `magisk/evergo-jump/evergo_stage1.ko` carries this one-byte patch
+(r_offset `0x150` → `0x158` in `.rela.gnu.linkonce.this_module`), sha256
+`12a5429968b3e32c445888f9e82f55f4edbbfafc9d4f69611479d4718c1d9bd2`. If you
+rebuild from source, build against a tree configured for the *running* kernel
+and verify the offset with:
+
+```bash
+llvm-readelf -r evergo_stage1.ko | grep -A3 this_module   # want r_offset 0000000000000158
+```
+
+Symptom table for this failure:
+
+| Symptom | Cause |
+| --- | --- |
+| `insmod` returns 0, module "Live", zero dmesg output, no jump | `init` relocation offset does not match the running kernel's `struct module` |
+| `rmmod` prints `stage1: unloaded` but insmod never printed `stage1: enter` | same — `exit` offset matched, `init` did not |
+
 ## Getting it without building
 
 A prebuilt module is attached to the repository's releases:

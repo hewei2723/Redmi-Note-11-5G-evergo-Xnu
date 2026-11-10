@@ -25,6 +25,8 @@ pinned revisions, not vendored.
 > | Windows 11 + WSL2 | **not tested at all.** Instructions follow the verified Linux path, but nobody has run them on Windows. |
 > | The `stage1/` module source is the one that produced the verified run | **not verified.** It is the source that was on disk when the menu was confirmed, but the `.ko` that ran was built earlier; the source has not been rebuilt and re-tested since. |
 > | The prebuilt `evergo_stage1.ko` in Releases matches this source | **verified**: rebuilding `stage1/evergo_stage1.c` reproduces its sha256 `bfd10375...` exactly |
+> | **That release `.ko` initialises on the phone kernel** | **NO — found and fixed 2026-11-10.** Its `init` relocation targets `struct module` offset `0x150`, but the phone kernel's `init` field is at `0x158` (verified against a vendor `.ko` built for this exact kernel). The kernel silently skips init: module "Live", zero output, no jump. The bundled `magisk/evergo-jump/evergo_stage1.ko` now carries the one-byte patch (`12a54299...`); see `stage1/README.md`. |
+> | **The menu displays without any pre-jump preparation** | **NO.** The verified run published the framebuffer handoff (module `mode=11`) and checked its geometry (`byte_pitch=4352`, `pages=2550`) before jumping. Skipping that gate produced "vertically repeated pictures" (8x-folded bands, the AFBC/pitch failure documented in the firmware source). `scripts/deploy.sh` now performs the gate automatically and refuses to jump on bad geometry. |
 > | XNU boots | **no.** See "Not working" below. |
 >
 > No claim here says "reproduced on another machine", because it has not been.
@@ -546,6 +548,15 @@ version, same LTO/CFI settings, same symbol addresses).
 # never writes a partition
 scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes --read-back
 ```
+
+The script reproduces the verified run's full sequence: it pushes the FD and
+the bundled (patched) stage1 module, sets `kptr_restrict=0`, wakes the screen
+and dismisses the keyguard, publishes the framebuffer handoff with the module's
+`mode=11` and **refuses to jump unless the geometry is exactly
+`byte_pitch=4352` / `pages=2550`** — a wrong pitch is what produces the
+"vertically repeated pictures" display failure — then jumps with `mode=5`.
+`--read-back` decodes the beacon page via the module's `mode=7` dump (this
+kernel has no `/dev/mem`; `CONFIG_DEVMEM` is off).
 
 The phone's screen is the only output for the firmware stage: `adb` is gone the
 moment the jump happens. Watch for, in order:

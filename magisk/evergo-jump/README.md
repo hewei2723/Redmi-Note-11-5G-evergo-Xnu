@@ -80,6 +80,13 @@ use it.
 | menu says `No input device` | expected; menu input is not implemented |
 | menu says `no boot entry found` | expected; no payload is published |
 | nothing, then Android returns | the jump did not take effect; check the log |
+| vertically repeated pictures | the framebuffer handoff geometry was wrong; the script's geometry gate now aborts before jumping instead — if you still see this, file it |
+
+Before jumping, the script publishes the framebuffer handoff (module `mode=11`)
+and **refuses to jump unless the geometry is exactly `byte_pitch=4352` /
+`pages=2550`** (exit code 4, message in the log). A wrong pitch is what folds
+the frame into repeated bands. If the gate fails: wake the screen, go back to
+the launcher, and tap the icon again.
 
 **The menu appearing is not XNU booting.** XNU does not start on this device
 yet. See the main README's verification table.

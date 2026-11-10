@@ -76,6 +76,13 @@ your device reproduce the known state, so later failures are attributable.
 scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes
 ```
 
+`deploy.sh` performs the verified run's full preparation automatically: it
+wakes the screen, dismisses the keyguard, publishes the framebuffer handoff
+(module `mode=11`) and **gates on its geometry** (`byte_pitch=4352`,
+`pages=2550`) before jumping. If the gate fails the script refuses to jump —
+that is the "vertically repeated pictures" display failure being caught
+*before* it costs you a run.
+
 Watch the screen. Expected sequence:
 
 1. full-screen colour bars (SEC has taken the framebuffer),
@@ -88,7 +95,9 @@ Then read the beacons:
 scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes --read-back
 ```
 
-Expected: beacon magic present, stage `0xA2` or `0xA3`.
+Expected: beacon magic present, stage `0xA2` (the menu blocks inside
+`AfterConsole`, so `0xA3` is never written on a successful menu run), pattern
+mask `0x3f3f` in slot 14, exception slots zero.
 
 **If you do not see the menu, stop and fix that first.** Everything downstream
 assumes this step works.
@@ -114,15 +123,37 @@ After the run, record:
 
 ## 5. Reading beacons without a full redeploy
 
-If you only need the current beacon page (for example after a manual reset):
+This kernel has **no `/dev/mem`** (`CONFIG_DEVMEM` is off), so the beacon page
+is read back with the module's own `mode=7` dump:
 
 ```bash
-adb shell "su -c 'dd if=/dev/mem bs=256 skip=$((0x4811fc00/256)) count=1 2>/dev/null'" > beacon.bin
-adb shell "su -c 'dd if=/dev/mem bs=2048 skip=$((0x4811f800/2048)) count=1 2>/dev/null'" > trace.bin
-scripts/decode-beacons.py --beacon beacon.bin --trace trace.bin
+adb shell "su -c '
+  echo 0 > /proc/sys/kernel/kptr_restrict
+  F=\$(awk \"\\\$3==\\\"filp_open\\\"{print \\\$1}\" /proc/kallsyms)
+  W=\$(awk \"\\\$3==\\\"kernel_write\\\"{print \\\$1}\" /proc/kallsyms)
+  insmod /data/adb/evergo_stage1.ko mode=7 \
+    p_marker_pa=0x4811F800 p_marker_count=16 \
+    fd_path=/data/local/tmp/beacons.bin \
+    p_filp_open=0x\$F p_kernel_write=0x\$W
+  rmmod evergo_stage1
+  chmod 644 /data/local/tmp/beacons.bin'"
+adb pull /data/local/tmp/beacons.bin beacon-dump.bin
 ```
 
-This reads memory only. It does not load a module and does not reset anything.
+The dump starts at `0x4811F800` (TRC ring); the beacon page is at offset
+`0x400` inside it. The firmware writes the magic as a full u64 in slot 0 and
+the stage in slot 1, so decode the slots directly:
+
+* slot 0 = `0x53473142` ("B1GS") → page valid
+* slot 1 = last stage (`0xA2` = DXE dispatch complete, the menu launch point;
+  the menu blocks inside `AfterConsole`, so `0xA3` is never written on a
+  successful menu run)
+* slot 14 = `0xFB..........3f3f` → colour-bar pattern written into the live
+  scanout buffer and read back 6/6
+* slot 15 = the framebuffer base the firmware adopted
+* slots 18–23 all zero → no exception occurred
+
+This loads a module but does not reset anything.
 
 ---
 
