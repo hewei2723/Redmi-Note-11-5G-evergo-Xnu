@@ -27,9 +27,30 @@ SoC 从不复位：preloader 与 LK 被完全跳过，DRAM 保留其内容。这
 是启动链中用户无法自行重建的唯一部分。编译好的 `.ko` 是 314 KB，*不*提交，因为它
 必须匹配你正在运行的内核：同内核版本、同 LTO/CFI 配置、同符号地址。
 
+## 不构建也能拿到
+
+预编译模块附在仓库的 Release 中：
+
+```bash
+gh release download stage1-module-v1 --repo hewei2723/evergo-uefi-port
+sha256sum -c SHA256SUMS
+```
+
+或从
+<https://github.com/hewei2723/evergo-uefi-port/releases/tag/stage1-module-v1>
+下载 `evergo_stage1.ko`。
+
+它由本目录的源码构建，重新构建可复现同一 sha256。**先检查
+`adb shell uname -r`：** 该模块只能在 `4.14.186-perf-g75f5627fcaea` 上加载。
+内核不同就自行构建。
+
+它存在的意义是让全新环境无需拉取 1.7 GB 内核树即可部署。若你的内核不同，
+从源码构建仍是受支持的路径。
+
 ## 构建它
 
-模块必须针对本设备准备好的 Android 5.10 内核树构建。仅有内核源码**不**够；代码树
+模块必须针对本设备准备好的内核树构建。本机原厂内核是 **4.14.186**
+（`4.14.186-perf-g75f5627fcaea`），不是 5.10——构建前先用 `uname -r` 确认。仅有内核源码**不**够；代码树
 必须已配置、并构建到 `Module.symvers` 已存在。
 
 ```bash

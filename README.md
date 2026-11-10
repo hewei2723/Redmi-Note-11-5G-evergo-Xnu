@@ -24,6 +24,7 @@ pinned revisions, not vendored.
 > | **The documented workflow works on a second, independent machine** | **NOT verified.** Everything so far ran on one machine, in containers on it. |
 > | Windows 11 + WSL2 | **not tested at all.** Instructions follow the verified Linux path, but nobody has run them on Windows. |
 > | The `stage1/` module source is the one that produced the verified run | **not verified.** It is the source that was on disk when the menu was confirmed, but the `.ko` that ran was built earlier; the source has not been rebuilt and re-tested since. |
+> | The prebuilt `evergo_stage1.ko` in Releases matches this source | **verified**: rebuilding `stage1/evergo_stage1.c` reproduces its sha256 `bfd10375...` exactly |
 > | XNU boots | **no.** See "Not working" below. |
 >
 > No claim here says "reproduced on another machine", because it has not been.
@@ -322,6 +323,26 @@ Two things you **must** supply yourself:
 * the Android NDK (see below), and
 * for deployment only: `adb`, an unlocked bootloader, and the device-side
   `evergo_stage1` kernel module, built from [`stage1/`](stage1/README.md).
+
+### Everything you need is reachable from this page
+
+This repository is meant to be used by people who have never contacted its
+author. Nothing here requires a file from the author's machine. The complete
+list of external things, and where each comes from:
+
+| What | Where to get it | Needed for |
+| --- | --- | --- |
+| UEFI sources, patches, scripts | this repository | build |
+| Upstream trees (Mu, Silicium, UniXNU, OpenSSL, ...) | `scripts/fetch-deps.sh`, pinned in `deps.lock` | build |
+| Android NDK | link in §4 | build |
+| `build-essential`, `uuid-dev` | your distribution | build |
+| **`evergo_stage1.ko`** | **the repository's Releases page** | deploy only |
+| the device kernel tree (1.7 GB) | Xiaomi's public GitHub; link in `stage1/README.md` | only if you rebuild the module |
+| `adb`, `fastboot` | Android platform-tools | deploy only |
+
+So a fresh machine can build the firmware with no outside help, and can deploy
+it by downloading one file from the Releases page. The only reason to fetch the
+kernel tree is if your kernel differs from the one the prebuilt module targets.
 
 ### Windows: use WSL2
 

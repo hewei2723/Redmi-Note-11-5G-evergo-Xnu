@@ -32,10 +32,31 @@ of the boot chain a user could not otherwise reconstruct. The compiled `.ko` is
 314 KB and is *not* committed, because it must match the kernel you are running:
 same kernel version, same LTO/CFI configuration, same symbol addresses.
 
+## Getting it without building
+
+A prebuilt module is attached to the repository's releases:
+
+```bash
+gh release download stage1-module-v1 --repo hewei2723/evergo-uefi-port
+sha256sum -c SHA256SUMS
+```
+
+Or download `evergo_stage1.ko` from
+<https://github.com/hewei2723/evergo-uefi-port/releases/tag/stage1-module-v1>.
+
+It was built from the source in this directory and rebuilding reproduces the
+same sha256. **Check `adb shell uname -r` first:** the module only loads on
+`4.14.186-perf-g75f5627fcaea`. On any other kernel, build your own.
+
+This exists so a fresh environment can deploy without fetching the 1.7 GB
+kernel tree. Building from source is still the supported path if your kernel
+differs.
+
 ## Building it
 
-The module must be built against the prepared Android 5.10 kernel tree for this
-device. It is **not** enough to have the kernel sources; the tree must be
+The module must be built against the prepared kernel tree for this device.
+The stock kernel on this phone is **4.14.186** (`4.14.186-perf-g75f5627fcaea`),
+not 5.10 — check `uname -r` before building. It is **not** enough to have the kernel sources; the tree must be
 configured and built far enough that `Module.symvers` exists.
 
 ```bash
