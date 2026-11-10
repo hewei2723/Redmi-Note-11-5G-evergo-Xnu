@@ -1,5 +1,7 @@
 # evergo (MT6833) bring-up
 
+[**中文**](PORTING-evergo.zh-CN.md) | English
+
 > **Work in progress. Do not treat this branch as a release firmware.**
 
 This package is derived from `lancelotPkg` and `MT6789Pkg`. It is the compileable

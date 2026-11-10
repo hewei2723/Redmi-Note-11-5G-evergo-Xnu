@@ -1,5 +1,7 @@
 # Troubleshooting
 
+[**中文**](TROUBLESHOOTING.zh-CN.md) | English
+
 Symptoms seen on this project, what caused them, and — more usefully — what each
 one does and does not prove.
 

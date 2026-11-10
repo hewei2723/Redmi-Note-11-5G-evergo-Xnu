@@ -1,5 +1,7 @@
 # `evergo_stage1` — the hot-jump kernel module
 
+[**中文**](README.zh-CN.md) | English
+
 This is the device-side half of the boot chain. Everything in the top-level
 repository runs on your build machine; this module runs on the phone, inside
 Android, as root, and hands control to the UEFI firmware.

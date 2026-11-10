@@ -1,5 +1,7 @@
 # Evergo UEFI / XNU
 
+[**中文**](README.zh-CN.md) | English
+
 UEFI firmware and XNU boot chain for the **Redmi Note 11 5G** (Xiaomi `evergo`,
 MediaTek MT6833 / Dimensity 810 class SoC).
 

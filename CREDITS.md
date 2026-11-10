@@ -1,5 +1,7 @@
 # Credits and third-party notices
 
+[**中文**](CREDITS.zh-CN.md) | English
+
 This port is derived work. Nothing here would exist without the projects below,
 and their licences and authorship apply to the parts they contributed.
 

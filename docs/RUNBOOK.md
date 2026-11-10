@@ -1,5 +1,7 @@
 # RUNBOOK — evergo UEFI bring-up on hardware
 
+[**中文**](RUNBOOK.zh-CN.md) | English
+
 Step-by-step procedure for taking this repository to a physical Redmi Note 11 5G
 and observing what the firmware does. Every step states what it should produce
 and when to stop.

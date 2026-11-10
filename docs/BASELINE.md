@@ -1,5 +1,7 @@
 # Verified baseline
 
+[**中文**](BASELINE.zh-CN.md) | English
+
 What "working" means in this repository, how it was established, and how to
 check that a build is the same thing.
 
