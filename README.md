@@ -21,6 +21,7 @@ pinned revisions, not vendored.
 > | BootShim.bin is identical across platforms | **verified**: sha256 `26c74d4e...` on both macOS and Linux |
 > | **The documented workflow works on a second, independent machine** | **NOT verified.** Everything so far ran on one machine, in containers on it. |
 > | Windows 11 + WSL2 | **not tested at all.** Instructions follow the verified Linux path, but nobody has run them on Windows. |
+> | The `stage1/` module source is the one that produced the verified run | **not verified.** It is the source that was on disk when the menu was confirmed, but the `.ko` that ran was built earlier; the source has not been rebuilt and re-tested since. |
 > | XNU boots | **no.** See "Not working" below. |
 >
 > No claim here says "reproduced on another machine", because it has not been.
@@ -39,7 +40,7 @@ The chain runs:
 
 ```
 Android (unmodified, booted normally)
-  -> evergo_stage1.ko   kernel module, copies image into reserved DRAM
+  -> evergo_stage1.ko   kernel module, copies the FD into reserved DRAM
   -> BootShim           copies the FD to 0xB0000000, jumps
   -> UEFI SEC           memory map, decompresses the firmware volume
   -> UEFI DXE / BDS     dispatches drivers, installs protocols
@@ -139,7 +140,7 @@ flowchart TD
 
 | Component | Path | Role |
 | --- | --- | --- |
-| `evergo_stage1` | not in this repo (device-side `.ko`) | copies the image into reserved DRAM, resets the SoC |
+| `evergo_stage1` | `stage1/` (kernel module, built separately) | copies the FD into reserved DRAM, then branches into it |
 | `BootShim` | `BootShim/BootShim.S` | position-independent entry: records the DTB pointer, copies the FD to its link address, jumps |
 | SEC | `Silicon/Silicium/SiliciumPkg/Sec` | first C code; builds the memory map from `MemoryMapLib`, decompresses the FV, enters DXE |
 | evergo platform | `Platforms/Xiaomi/evergoPkg` | DSC/FDF, memory map, keypad library, board drivers |
@@ -209,6 +210,10 @@ description, as shipped", not as something this project authored.
 │   ├── Silicium/SiliciumPkg/Drivers/        SimpleFbDxe, KeypadDxe, KeypadDeviceDxe
 │   └── MediaTek/MediaTekPkg/Drivers/        GpioDxe, PmicWrapperDxe, MT6358PmicDxe
 ├── BootShim/                    shim assembly and its Makefile
+├── stage1/                      the hot-jump kernel module (GPL-2.0)
+│   ├── evergo_stage1.c          copies the FD to reserved DRAM and jumps
+│   ├── Makefile                 out-of-tree build against the device kernel
+│   └── README.md                how to build it, and why LTO+CFI is required
 ├── Resources/
 │   ├── Configs/evergo.toml      board configuration for the payload packer
 │   ├── DTBs/evergo.dtb          the device's own FDT
@@ -220,8 +225,10 @@ description, as shipped", not as something this project authored.
 │   ├── build.sh                 build the FD
 │   ├── build-shim.sh            build BootShim.bin
 │   ├── make-boot-image.sh       wrap FD + shim + DTB into a boot image
-│   ├── deploy.sh                push to the phone (device-touching)
-│   └── decode-beacons.py        decode the beacon page and TRC ring
+│   ├── deploy.sh                run the firmware on the phone (device-touching)
+│   ├── compare-baseline.py      compare a build against the verified baseline
+│   ├── decode-beacons.py        decode the beacon page and TRC ring
+│   └── lib.sh                   shared helpers (sha256, cpu count)
 └── docs/
     ├── BASELINE.md              what the verified build is, and how it was proven
     ├── RUNBOOK.md               step-by-step device procedure
@@ -312,7 +319,7 @@ Two things you **must** supply yourself:
 
 * the Android NDK (see below), and
 * for deployment only: `adb`, an unlocked bootloader, and the device-side
-  `evergo_stage1.ko` module described in `docs/RUNBOOK.md` §1.
+  `evergo_stage1` kernel module, built from [`stage1/`](stage1/README.md).
 
 ### Windows: use WSL2
 
@@ -493,15 +500,16 @@ If `ro.product.device` is not `evergo`, stop. This firmware is for one device.
 | `evergo_stage1.ko` on the device | `/data/adb/evergo_stage1.ko` |
 | Kernel module loading allowed | `adb shell su -c 'lsmod'` succeeds |
 
-The module is device-side tooling that is not part of this repository. Without
-it the hot-jump path cannot run; see [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for
-what it must do, so you can build or obtain an equivalent.
+The module's source is in [`stage1/`](stage1/README.md) and is built against the
+device's own kernel tree; see that directory for the procedure. The compiled
+`.ko` is not committed because it must match the kernel you are running (same
+version, same LTO/CFI settings, same symbol addresses).
 
 ### 6.3 Deploy and start
 
 ```bash
 # never writes a partition
-scripts/deploy.sh --image out/evergo-boot.img --serial <serial> --yes --read-back
+scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes --read-back
 ```
 
 The phone's screen is the only output for the firmware stage: `adb` is gone the
@@ -516,7 +524,7 @@ moment the jump happens. Watch for, in order:
 After the device returns to Android:
 
 ```bash
-scripts/deploy.sh --image out/evergo-boot.img --serial <serial> --yes --read-back
+scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes --read-back
 ```
 
 or decode a dump you already have:
@@ -551,7 +559,7 @@ The menu appearing does **not** mean XNU ran. The distinction:
 
 | Operation | Risk | Recovery |
 | --- | --- | --- |
-| `deploy.sh` (default) | the phone resets; DRAM-only change | power-cycle. No partition changed. |
+| `deploy.sh --fd` (default) | the phone jumps into the firmware; DRAM-only change | power-cycle. No partition changed. |
 | `deploy.sh --flash` | **can brick** boot_b | `fastboot flash boot_b <stock image>`, needs an unlocked bootloader and the stock image on hand |
 | changing memory map addresses | silent hang, no output | revert the change; the beacon page tells you how far it got |
 
@@ -634,7 +642,21 @@ STEP 2 - BUILD ENVIRONMENT
 4. Run `scripts/build.sh --tree .work/uefi`. Confirm the FD is exactly 2 MiB.
    If the build script reports a different size, the hot-jump flags were lost.
 
-STEP 3 - DEPLOY AND OBSERVE, WITH THE USER'S PERMISSION
+STEP 3 - THE HOT-JUMP MODULE
+The firmware cannot start itself; a kernel module on the phone copies it into
+reserved DRAM and jumps. Its source is in stage1/. Read stage1/README.md.
+1. It must be built against the device's own kernel tree with LTO and CFI on.
+   A module built without them fails to load on this device, and the error does
+   not say why. Do not skip this.
+2. Ask the user whether they already have a working evergo_stage1.ko. If they
+   do, use it and do not rebuild: a self-built module that differs from the one
+   that produced the verified baseline is a variable you do not need.
+3. If you must build it, confirm the kernel version on the phone with
+   `adb shell uname -r` matches the tree you are building against.
+4. The module takes the raw 2 MiB FD, not the boot image. Passing the boot
+   image produces "FD has no _FVH at 0x28".
+
+STEP 4 - DEPLOY AND OBSERVE, WITH THE USER'S PERMISSION
 Deploying changes device state and needs an unlocked bootloader and root. Before
 running scripts/deploy.sh:
 - explain exactly what it will do (hot jump by default; no partition is
@@ -651,7 +673,7 @@ After each run, read the beacon page and decode it. Report:
 - whether the reading is trustworthy (magic present?) or void.
 Never describe "the menu appeared" as "XNU booted".
 
-STEP 4 - DEBUGGING RULES THAT THIS PROJECT LEARNED THE HARD WAY
+STEP 5 - DEBUGGING RULES THAT THIS PROJECT LEARNED THE HARD WAY
 - Fix the measurement before trusting it. If a value looks like proof that
   something did not run, first verify the write address, the read address, the
   cache maintenance address and the offset used by the reader all agree.
@@ -668,7 +690,7 @@ STEP 4 - DEBUGGING RULES THAT THIS PROJECT LEARNED THE HARD WAY
   for EVERGO_INPUT_DIAG style gates) so the shipping path stays clean, and give
   every round a unique marker so stale data cannot be mistaken for fresh data.
 
-STEP 5 - MAKING CHANGES
+STEP 6 - MAKING CHANGES
 - Reuse what is here. BootManagerLib, MemoryMapLib and the shim already encode
   decisions that took real hardware time to get right; rewriting them from
   scratch will re-introduce faults.
@@ -681,7 +703,7 @@ STEP 5 - MAKING CHANGES
 - When you finish a step, write down what you verified, what you did not, and
   what the next person should try. Do not claim a stage you did not observe.
 
-STEP 6 - WHAT TO WORK ON NEXT
+STEP 7 - WHAT TO WORK ON NEXT
 The highest-value open problems, in order:
 1. Menu input. The menu reports "No input device". Work out why no
    SimpleTextIn handle with a device path reaches the console, without breaking

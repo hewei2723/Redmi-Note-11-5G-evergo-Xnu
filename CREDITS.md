@@ -112,13 +112,27 @@ measured on a physical device (GIC and PMIC bases, display subsystem, panel
 geometry, framebuffer base, reserved DRAM windows). They are facts about the
 hardware, recorded in comments next to their use.
 
+## Licence layering
+
+Two different licences apply, and they are compatible because the works are
+separate:
+
+| Part | Licence | Why |
+| --- | --- | --- |
+| UEFI firmware, platform package, shim, docs | BSD-2-Clause-Patent (`LICENSE`) | inherited from the UEFI upstreams |
+| `stage1/evergo_stage1.c` | GPL-2.0 | it is a Linux kernel module; the kernel module interface requires it |
+
+The kernel module links against the Linux kernel, not against the firmware. It
+ships its own `MODULE_LICENSE("GPL")` and is not combined into the BSD-licensed
+firmware binary, so the two do not impose terms on each other.
+
 ## Not included
 
 This repository deliberately does **not** contain:
 
 * any Apple code, kernel, kext, firmware or binary,
 * `DarwinBoot` or any other prebuilt XNU boot component,
-* the device-side hot-jump kernel module (`evergo_stage1.ko`),
+* a prebuilt hot-jump kernel module binary (the source is in `stage1/`)
 * stock firmware images or partition dumps,
 * third-party source trees (fetched at pinned revisions instead).
 

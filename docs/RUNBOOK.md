@@ -16,7 +16,7 @@ do not chase a stage this project has never reached.
 | Device is `evergo` | `adb shell getprop ro.product.device` → `evergo` | stop, wrong device |
 | Bootloader unlocked | `fastboot oem device-info` | the hot-jump path needs it; stop |
 | Root shell | `adb shell su -c id` → `uid=0` | stop |
-| Stage1 module present | `/data/adb/evergo_stage1.ko` | see §1 |
+| Stage1 module built and pushed | `/data/adb/evergo_stage1.ko` | see §1 and `stage1/README.md` |
 | Stock `boot_b` image on this machine | `ls stock-boot_b.img` | required only if you will flash |
 
 Do not proceed on a device whose `ro.product.device` is anything other than
@@ -26,19 +26,20 @@ Do not proceed on a device whose `ro.product.device` is anything other than
 
 ## 1. The stage1 module
 
-`evergo_stage1.ko` is device-side tooling that is **not** part of this
-repository. It performs the hot jump: copy the image into reserved DRAM, then
-reset the SoC so the preloader and LK are skipped.
+The module source is in [`../stage1/`](../stage1/README.md). It performs the hot
+jump: copy the 2 MiB FD to `0xB0000000`, verify the copy, clean the caches,
+turn the MMU off and branch into the FD. The preloader and LK are skipped
+entirely and DRAM keeps its contents, which is why a failed attempt is
+recovered by power-cycling.
 
-For the procedure here to work it must:
+It takes the **raw FD**, not the boot image: the boot image is only for the
+`--flash` path, where LK does the unpacking.
 
-1. accept the boot image produced by `scripts/make-boot-image.sh`,
-2. copy the kernel region (BootShim + FD + optional payload) to `0xB0000000`,
-3. write the DTB pointer the shim expects at `0xA40007F8`,
-4. write a jump parameter block the shim reads,
-5. reset the SoC without power-cycling DRAM.
+Build it with `stage1/Makefile` against the device kernel tree. The compiled
+`.ko` is not shipped, because it must match the running kernel exactly
+(version, LTO/CFI, symbol addresses).
 
-If you do not have it, the alternative is `deploy.sh --flash`, which replaces
+If you cannot build it, the alternative is `deploy.sh --flash`, which replaces
 `boot_b` and is destructive. See §6 before choosing that.
 
 ---
@@ -70,7 +71,7 @@ Run the unmodified image once. This establishes that your build environment and
 your device reproduce the known state, so later failures are attributable.
 
 ```bash
-scripts/deploy.sh --image out/evergo-boot.img --serial <serial> --yes
+scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes
 ```
 
 Watch the screen. Expected sequence:
@@ -82,7 +83,7 @@ Watch the screen. Expected sequence:
 Then read the beacons:
 
 ```bash
-scripts/deploy.sh --image out/evergo-boot.img --serial <serial> --yes --read-back
+scripts/deploy.sh --fd out/SILICIUM_UEFI.fd --serial <serial> --yes --read-back
 ```
 
 Expected: beacon magic present, stage `0xA2` or `0xA3`.
