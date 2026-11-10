@@ -345,8 +345,8 @@ sudo apt install -y build-essential uuid-dev git make python3 curl unzip xz-util
 # Building under /mnt/c is roughly an order of magnitude slower because every
 # file access crosses the Windows boundary, and EDK2 does a lot of them.
 cd ~
-git clone https://github.com/hewei2723/Redmi-Note-11-5G-evergo-Xnu.git
-cd Redmi-Note-11-5G-evergo-Xnu
+git clone https://github.com/hewei2723/evergo-uefi-port.git
+cd evergo-uefi-port
 
 # Android NDK, Linux build, inside WSL2:
 curl -LO https://dl.google.com/android/repository/android-ndk-r30-linux.zip
@@ -382,8 +382,8 @@ Notes specific to WSL2:
 ### Step 1 — fetch dependencies
 
 ```bash
-git clone https://github.com/hewei2723/Redmi-Note-11-5G-evergo-Xnu.git
-cd Redmi-Note-11-5G-evergo-Xnu
+git clone https://github.com/hewei2723/evergo-uefi-port.git
+cd evergo-uefi-port
 scripts/fetch-deps.sh
 ```
 

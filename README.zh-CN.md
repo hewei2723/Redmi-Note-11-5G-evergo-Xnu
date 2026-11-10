@@ -330,8 +330,8 @@ sudo apt install -y build-essential uuid-dev git make python3 curl unzip xz-util
 # 在 /mnt/c 下构建大约慢一个数量级，因为每次文件访问都要跨 Windows 边界，
 # 而 EDK2 的文件访问非常频繁。
 cd ~
-git clone https://github.com/hewei2723/Redmi-Note-11-5G-evergo-Xnu.git
-cd Redmi-Note-11-5G-evergo-Xnu
+git clone https://github.com/hewei2723/evergo-uefi-port.git
+cd evergo-uefi-port
 
 # Android NDK，Linux 版，放在 WSL2 内：
 curl -LO https://dl.google.com/android/repository/android-ndk-r30-linux.zip
@@ -363,8 +363,8 @@ WSL2 专属注意事项：
 ### 第 1 步 —— 拉取依赖
 
 ```bash
-git clone https://github.com/hewei2723/Redmi-Note-11-5G-evergo-Xnu.git
-cd Redmi-Note-11-5G-evergo-Xnu
+git clone https://github.com/hewei2723/evergo-uefi-port.git
+cd evergo-uefi-port
 scripts/fetch-deps.sh
 ```
 
